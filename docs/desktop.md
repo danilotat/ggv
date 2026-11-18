@@ -302,6 +302,7 @@ every shortcut:
 | Anything | Ctrl+K, type a few letters |
 | Go to a locus | Type in the locus box (Ctrl+L): `chr17`, `chr17:41,244,435` (a base, outlined) or `chr17:41,240,000-41,250,000` |
 | Zoom | Mouse wheel (around the pointer; over rows that don't all fit, the wheel scrolls them and Ctrl+wheel zooms), `+`/`−` (Ctrl+`+`/`−` scale the interface instead), double-click to zoom in (on a gene: fit the gene), or drag across the ruler or reference row to zoom to exactly what you mark |
+| Show reads further out | Alt+= / Alt+− change the read window (the widest view that still shows reads, 50 kb by default) one size up or down, shown briefly in the top-right corner; also the toolbar's **Reads up to** menu |
 | Step through variants | **< Variant** / **Variant >**, Ctrl+B / Ctrl+F |
 | Pan | Drag on the tracks (horizontal: genome; vertical: read rows), arrow keys, trackpad sideways scroll |
 | Scroll rows | Drag up/down in a track, or `↑`/`↓`, PageUp/PageDown over it |
