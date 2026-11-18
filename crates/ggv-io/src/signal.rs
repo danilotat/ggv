@@ -98,7 +98,7 @@ struct Zoom {
 
 pub struct BigWig {
     path: PathBuf,
-    file: File,
+    file: crate::remote::Source,
     little: bool,
     /// Name → (id, length).
     chroms: Vec<(String, u32, u64)>,
@@ -110,7 +110,7 @@ pub struct BigWig {
 impl BigWig {
     pub fn open(path: &Path) -> crate::Result<Self> {
         let io = |e: std::io::Error| crate::Error::Io { path: path.to_owned(), cause: e };
-        let mut file = File::open(path).map_err(io)?;
+        let mut file = crate::remote::Source::open(path).map_err(io)?;
         let mut h = [0u8; 64];
         file.read_exact(&mut h).map_err(io)?;
         let little = match h[..4] {
@@ -325,8 +325,13 @@ pub struct BedGraph {
 }
 
 fn open_text(path: &Path) -> crate::Result<Box<dyn BufRead>> {
-    let f = File::open(path).map_err(|e| crate::Error::Io { path: path.to_owned(), cause: e })?;
-    let lower = path.to_string_lossy().to_ascii_lowercase();
+    // A remote text file has no index to read parts of: it is fetched whole.
+    let f: Box<dyn std::io::Read> = if crate::remote::is_remote(path) {
+        Box::new(std::io::Cursor::new(crate::remote::read_whole(path).map_err(|e| crate::Error::Io { path: path.to_owned(), cause: e })?))
+    } else {
+        Box::new(File::open(path).map_err(|e| crate::Error::Io { path: path.to_owned(), cause: e })?)
+    };
+    let lower = crate::remote::file_name(path).to_ascii_lowercase();
     Ok(if lower.ends_with(".gz") || lower.ends_with(".bgz") {
         Box::new(BufReader::new(flate2::read::MultiGzDecoder::new(f)))
     } else {
@@ -495,7 +500,7 @@ fn not_a_signal(path: &Path, e: crate::Error) -> crate::Error {
 
 impl Signal {
     pub fn open(path: &Path) -> crate::Result<Self> {
-        let n = path.to_string_lossy().to_ascii_lowercase();
+        let n = crate::remote::file_name(path).to_ascii_lowercase();
         let b = n.trim_end_matches(".gz").trim_end_matches(".bgz");
         if b.ends_with(".bw") || b.ends_with(".bigwig") {
             Ok(Self::BigWig(Box::new(BigWig::open(path)?)))

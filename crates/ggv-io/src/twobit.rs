@@ -8,7 +8,6 @@
 
 use std::{
     collections::HashMap,
-    fs::File,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
@@ -26,7 +25,7 @@ struct Layout {
 
 pub struct TwoBit {
     path: PathBuf,
-    file: File,
+    file: crate::remote::Source,
     little: bool,
     contigs: Vec<Contig>,
     offsets: HashMap<String, u64>,
@@ -40,7 +39,7 @@ fn err(path: &Path, msg: impl Into<String>) -> crate::Error {
 impl TwoBit {
     pub fn open(path: &Path) -> crate::Result<Self> {
         let io = |e: std::io::Error| crate::Error::Io { path: path.to_owned(), cause: e };
-        let mut file = File::open(path).map_err(io)?;
+        let mut file = crate::remote::Source::open(path).map_err(io)?;
         let mut head = [0u8; 16];
         file.read_exact(&mut head).map_err(io)?;
         let little = match head[..4] {

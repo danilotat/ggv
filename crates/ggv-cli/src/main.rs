@@ -25,6 +25,38 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (commit ", env!("GGV_
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// The index of an alignment file, when it isn't next to the file (a presigned URL, a portal
+    /// that keeps it elsewhere). Repeat for several files: paired with them in order.
+    #[arg(long = "index", global = true, value_name = "FILE")]
+    indexes: Vec<PathBuf>,
+}
+
+/// The alignment files a command names, in order (what `--index` pairs with).
+fn alignment_files(command: &Command) -> Vec<&std::path::Path> {
+    match command {
+        Command::Info { bam, .. } => vec![bam.as_path()],
+        Command::Render(a) => vec![a.input.bam.as_path()],
+        Command::Query(Query::Pileup { input, .. } | Query::Summary { input, .. }) => vec![input.bam.as_path()],
+        Command::Query(Query::Junctions { bams, .. }) => bams.iter().map(PathBuf::as_path).collect(),
+        Command::Batch(a) => a.bams.iter().map(PathBuf::as_path).collect(),
+        Command::Mcp { bams, .. } => bams.iter().map(PathBuf::as_path).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Records each `--index` for its alignment file.
+fn register_indexes(cli: &Cli) -> Result<()> {
+    if cli.indexes.is_empty() {
+        return Ok(());
+    }
+    let files = alignment_files(&cli.command);
+    if cli.indexes.len() > files.len() {
+        anyhow::bail!("--index given {} times for {} alignment file(s); give one per file, in the same order", cli.indexes.len(), files.len());
+    }
+    for (file, index) in files.iter().zip(&cli.indexes) {
+        ggv_io::set_index_for(file, index);
+    }
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -96,11 +128,17 @@ enum Command {
         /// Gene annotation (GTF, GFF3, BED); repeatable.
         #[arg(short = 'g', long = "genes", value_name = "FILE")]
         genes: Vec<PathBuf>,
+        /// Let tool calls read URLs on loopback, private or link-local addresses (refused by
+        /// default, so an agent can't make GGV read internal services).
+        #[arg(long)]
+        allow_private_urls: bool,
     },
 }
 
 /// What a file is, from its (lowercased) name.
 pub(crate) fn kind_of(name: &str) -> &'static str {
+    // A URL's query string (a presigned URL's signature) isn't part of the name.
+    let name = if ggv_io::remote::is_remote(std::path::Path::new(name)) { ggv_io::remote::redact(name) } else { name };
     let base = name.trim_end_matches(".gz").trim_end_matches(".bgz");
     if base.ends_with(".bam") || base.ends_with(".cram") {
         "alignments"
@@ -547,6 +585,7 @@ fn run(mut cli: Cli) -> Result<()> {
         Command::Batch(a) => batch_genome(a, genome_files)?,
         _ => {}
     }
+    register_indexes(&cli)?;
     // Not locked: `ggv mcp` writes replies from several threads.
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout);
@@ -602,7 +641,8 @@ fn run(mut cli: Cli) -> Result<()> {
             }
         }
         Command::Render(args) => render(&args)?,
-        Command::Mcp { attach, bams, mut reference, vcfs, mut genes, genome, signals } => {
+        Command::Mcp { attach, bams, mut reference, vcfs, mut genes, genome, signals, allow_private_urls } => {
+            ggv_io::remote::set_allow_private_hosts(allow_private_urls);
             if let Some(name) = &genome {
                 let l = genome_files(name)?;
                 reference.get_or_insert(l.reference);
@@ -1006,6 +1046,9 @@ enum Indexed {
 /// Builds `file`'s index unless it has one (`force` builds it regardless).
 fn build_missing_index(file: &std::path::Path, force: bool) -> Result<Indexed> {
     let kind = ggv_io::index_kind(file).ok_or_else(|| anyhow::anyhow!("{}: ggv indexes BAM, CRAM, bgzipped VCF (.vcf.gz) and FASTA files, told by their names", file.display()))?;
+    if ggv_io::remote::is_remote(file) {
+        anyhow::bail!("{}: can't write an index next to a remote file; build one from a local copy, or give an existing index with --index", ggv_io::remote::display(file));
+    }
     if !file.is_file() {
         anyhow::bail!("{}: no such file", file.display());
     }

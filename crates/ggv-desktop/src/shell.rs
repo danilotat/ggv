@@ -406,7 +406,18 @@ impl Shell {
                     "open" => {
                         let files: Vec<PathBuf> = c.params.get("files").and_then(serde_json::Value::as_array).map(|a| a.iter().filter_map(|f| f.as_str()).map(PathBuf::from).collect()).unwrap_or_default();
                         let replace = c.params.get("replace").and_then(serde_json::Value::as_bool) == Some(true);
-                        if files.is_empty() { Err("no files given".to_owned()) } else { p.attach_open(files, replace, ctx) }
+                        // An index given for the one alignment file (not next to it: a presigned URL).
+                        let index = match c.params.get("index").and_then(serde_json::Value::as_str) {
+                            None => Ok(()),
+                            Some(index) => match files.iter().filter(|f| crate::files::kind_of(&f.to_string_lossy()) == Some(crate::files::Kind::Alignments)).collect::<Vec<_>>()[..] {
+                                [bam] => {
+                                    ggv_io::set_index_for(bam, std::path::Path::new(index));
+                                    Ok(())
+                                }
+                                _ => Err("`index` is for one alignment file; give exactly one BAM/CRAM with it".to_owned()),
+                            },
+                        };
+                        if files.is_empty() { Err("no files given".to_owned()) } else { index.and_then(|()| p.attach_open(files, replace, ctx)) }
                     }
                     "display" => p.attach_display(&c.params),
                     "bookmarks" => with(p.attach_bookmarks(&c.params)),

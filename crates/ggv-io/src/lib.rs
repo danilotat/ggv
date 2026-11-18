@@ -1,7 +1,8 @@
 //! File access for GGV, built on [pasta](https://github.com/DylanCosto/pasta).
 //!
-//! Today: local, indexed BAM and FASTA. Remote sources (HTTP range, S3/GCS) and CRAM come next,
-//! behind the same types, so callers in `ggv-query` don't change.
+//! Indexed BAM/CRAM, FASTA/2bit, VCF/BCF and signal tracks. BAM, CRAM and FASTA can also be
+//! read from `http(s)://`, `s3://` and `gs://` URLs by byte range ([`remote`]), behind the same
+//! types, so callers don't change.
 
 pub mod assembly;
 pub mod attach;
@@ -13,6 +14,7 @@ pub mod folders;
 pub mod genomes;
 mod indexing;
 pub mod places;
+pub mod remote;
 mod reference;
 pub mod signal;
 pub mod twobit;
@@ -28,6 +30,22 @@ pub use variants::{GenotypeClass, InfoField, SampleCall, Variant, VariantFile, b
 pub use pasta;
 
 use ggv_model::{Contig, Locus, Region, contig_aliases};
+
+/// Where alignment files' indexes are when they aren't next to them, set by the front ends
+/// (`--index`, the MCP `index` argument, the app's Open URL dialog).
+static INDEX_FOR: std::sync::Mutex<Vec<(std::path::PathBuf, std::path::PathBuf)>> = std::sync::Mutex::new(Vec::new());
+
+/// Opens `data`'s index from `index` from now on (in this process), wherever it is opened.
+pub fn set_index_for(data: &std::path::Path, index: &std::path::Path) {
+    let mut map = INDEX_FOR.lock().unwrap_or_else(|e| e.into_inner());
+    map.retain(|(d, _)| d != data);
+    map.push((data.to_owned(), index.to_owned()));
+}
+
+/// The index set for `data` with [`set_index_for`].
+pub fn index_for(data: &std::path::Path) -> Option<std::path::PathBuf> {
+    INDEX_FOR.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| d == data).map(|(_, i)| i.clone())
+}
 
 /// Parses and resolves locus text against a list of contigs. A string that is exactly a contig
 /// name wins over reading its tail as coordinates (`HLA-A*01:01:01:01` is a contig, not

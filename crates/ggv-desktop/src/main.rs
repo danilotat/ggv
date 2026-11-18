@@ -63,9 +63,13 @@ struct Cli {
     /// Locus to show, e.g. `chr20:1,895,892` or `chr20:1,890,000-1,940,000`.
     #[arg(short, long)]
     locus: Option<String>,
-    /// Indexed reference FASTA.
+    /// Indexed reference FASTA (a local path or a URL).
     #[arg(short = 'f', long)]
     reference: Option<PathBuf>,
+    /// The index of an alignment file when it isn't next to it (a presigned URL, a portal that
+    /// keeps it elsewhere). Repeat for several files: paired with them in order.
+    #[arg(long = "index", value_name = "FILE")]
+    indexes: Vec<PathBuf>,
     /// A built-in genome: hg38, hg19, hs1 (T2T), mm39, mm10, sacCer3 (also GRCh38, T2T, mouse...).
     /// Opens its reference and RefSeq genes, downloading them once if needed.
     #[arg(long, value_name = "NAME")]
@@ -292,6 +296,13 @@ fn main() -> eframe::Result {
         app::set_read_window(bp);
     }
     let mut inputs = split_inputs(cli.inputs, cli.locus);
+    if cli.indexes.len() > inputs.bams.len() {
+        eprintln!("ggv-desktop: --index given {} times for {} alignment file(s); give one per file, in the same order", cli.indexes.len(), inputs.bams.len());
+        std::process::exit(2);
+    }
+    for (bam, index) in inputs.bams.iter().zip(&cli.indexes) {
+        ggv_io::set_index_for(bam, index);
+    }
     inputs.vcfs.extend(cli.vcfs);
     inputs.genes.extend(cli.genes);
     let mut options = eframe::NativeOptions {

@@ -1,4 +1,4 @@
-use std::{fs::File, path::Path};
+use std::path::Path;
 
 use ggv_model::{Contig, Region};
 use pasta::{
@@ -6,7 +6,7 @@ use pasta::{
     fasta,
 };
 
-use crate::{Error, Result, error::IoContext, resolve_locus};
+use crate::{Error, Result, error::IoContext, remote::{self, Source}, resolve_locus};
 
 /// A reference: an indexed FASTA (`.fa` + `.fa.fai`, or bgzipped `.fa.gz` + `.fai` + `.gzi`)
 /// or a UCSC `.2bit`.
@@ -17,21 +17,49 @@ pub struct ReferenceFasta {
 }
 
 enum Inner {
-    Fasta(Box<fasta::io::IndexedReader<fasta::io::BufReader<File>>>),
+    Fasta(Box<IndexedFasta>),
     TwoBit(crate::twobit::TwoBit),
+}
+
+/// An indexed FASTA on disk or at a URL.
+pub(crate) type IndexedFasta = fasta::io::IndexedReader<fasta::io::BufReader<Source>>;
+
+/// Opens an indexed FASTA (`x.fa` + `x.fa.fai`, or bgzipped with `x.fa.gz.gzi` too), local or
+/// remote. A remote FASTA's indexes are fetched whole (and cached); its bases by range.
+pub(crate) fn indexed_fasta(path: &Path) -> Result<IndexedFasta> {
+    let source = Source::open(path).at(path)?;
+    let index_of = |ext: &str| -> Result<Vec<u8>> {
+        let p = remote::with_added_extension(path, ext);
+        remote::read_whole(&p).map_err(|cause| {
+            if cause.kind() == std::io::ErrorKind::NotFound {
+                Error::Io { path: path.to_owned(), cause: std::io::Error::new(cause.kind(), format!("no FASTA index (looked for {})", remote::file_name(&p))) }
+            } else {
+                Error::Io { path: p.clone(), cause }
+            }
+        })
+    };
+    let fai = fasta::fai::io::Reader::new(&index_of("fai")?[..]).read_index().at(path)?;
+    let name = remote::file_name(path).to_ascii_lowercase();
+    let reader = if name.ends_with(".gz") || name.ends_with(".bgz") {
+        let gzi = pasta::bgzf::gzi::io::Reader::new(&index_of("gzi")?[..]).read_index().at(path)?;
+        fasta::io::BufReader::Bgzf(pasta::bgzf::io::IndexedReader::new(source, gzi))
+    } else {
+        fasta::io::BufReader::Uncompressed(std::io::BufReader::new(source))
+    };
+    Ok(fasta::io::IndexedReader::new(reader, fai))
 }
 
 impl ReferenceFasta {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_owned();
-        if path.to_string_lossy().to_ascii_lowercase().ends_with(".2bit") {
+        if remote::file_name(&path).to_ascii_lowercase().ends_with(".2bit") {
             let t = crate::twobit::TwoBit::open(&path)?;
             let contigs = t.contigs().to_vec();
             return Ok(Self { path, reader: Inner::TwoBit(t), contigs });
         }
         // A missing index is named as such, not as the FASTA itself being missing (opening the
         // absent .fai/.gzi fails with "file not found", which was reported against the FASTA).
-        if path.exists() {
+        if !remote::is_remote(&path) && path.exists() {
             let gz = crate::indexing::is_gzip(&path)?;
             let needed = std::iter::once("fai").chain(gz.then_some("gzi"));
             let missing: Vec<String> = needed.map(|e| path.with_added_extension(e)).filter(|p| !p.exists()).map(|p| crate::assembly::display_name(&p)).collect();
@@ -40,9 +68,7 @@ impl ReferenceFasta {
                 return Err(Error::Io { path, cause: std::io::Error::new(std::io::ErrorKind::NotFound, msg) });
             }
         }
-        let reader = fasta::io::indexed_reader::Builder::default()
-            .build_from_path(&path)
-            .at(&path)?;
+        let reader = indexed_fasta(&path)?;
         let contigs = reader
             .index()
             .as_ref()

@@ -129,6 +129,11 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
 
 **Working faster:**
 
+- **Open a URL** (**Open > URL…**, or the palette): a BAM, CRAM, FASTA, 2bit, bigWig or annotation
+  at an `https://`, `s3://` or `gs://` address, read by byte range as in IGV (see [the command
+  line](cli.md#files-at-a-url-s3-gcs-https)). Give the index's URL too when it isn't next to the
+  file (a presigned URL); sessions remember it. On the command line, URLs go where paths do
+  (`ggv-desktop https://…/x.cram -f https://…/ref.fa`, with `--index` when needed).
 - **Open files** by dropping them on the window (BAM/CRAM, VCF/BCF, annotations, a FASTA as the
   reference, or a session `.json`), from **Session → Recent files**, or the toolbar buttons. A
   file without an index gets an offer to build one (BAI, falling back to CSI for long contigs;

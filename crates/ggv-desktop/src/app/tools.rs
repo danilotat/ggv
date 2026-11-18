@@ -803,6 +803,65 @@ impl App {
         }
     }
 
+    /// Open a file by URL (IGV's "Load from URL"): read by byte range, only what the view needs.
+    pub(super) fn open_url_window(&mut self, ctx: &egui::Context) {
+        let Some(mut form) = self.open_url.take() else { return };
+        if !self.is_active {
+            self.open_url = Some(form);
+            return;
+        }
+        let mut open = true;
+        let mut submit = false;
+        egui::Window::new("Open a URL")
+            .id(egui::Id::unique(("open-url", self.reference_slot)))
+            .open(&mut open)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label("BAM, CRAM, FASTA, 2bit, bigWig or annotation at an https://, s3:// or gs:// address (public or presigned). Only the parts you look at are fetched.");
+                ui.add_space(4.0);
+                ui.label("File URL");
+                let edit = ui.add(egui::TextEdit::singleline(&mut form.url).desired_width(520.0).hint_text("https://… or s3://bucket/path/sample.cram"));
+                if ui.memory_mut(|m| m.data.remove_temp::<bool>(egui::Id::unique("open-url-focus")).unwrap_or(false)) {
+                    edit.request_focus();
+                }
+                ui.label("Index URL (optional: when it isn't the file's URL plus .bai/.csi/.crai)");
+                let index = ui.add(egui::TextEdit::singleline(&mut form.index).desired_width(520.0));
+                let enter = (edit.lost_focus() || index.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if let Some(e) = &form.error {
+                    ui.colored_label(egui::Color32::from_rgb(200, 60, 60), e);
+                }
+                submit = ui.add_enabled(!form.url.trim().is_empty(), egui::Button::new("Open")).clicked() || (enter && !form.url.trim().is_empty());
+            });
+        if submit {
+            let (url, index) = (std::path::PathBuf::from(form.url.trim()), form.index.trim().to_owned());
+            let kind = crate::files::kind_of(&url.to_string_lossy());
+            form.error = if !ggv_io::remote::is_remote(&url) {
+                Some("Not a URL: give an https://, http://, s3:// or gs:// address (local files: Open > Alignments…)".into())
+            } else if !index.is_empty() && !ggv_io::remote::is_remote(std::path::Path::new(&index)) && !std::path::Path::new(&index).exists() {
+                Some("The index is neither a URL nor a file here".into())
+            } else if !index.is_empty() && kind != Some(crate::files::Kind::Alignments) {
+                Some("An index URL is for BAM or CRAM files".into())
+            } else if kind.is_none() {
+                Some("The URL's name doesn't say what it is (.bam, .cram, .fa, .2bit, .bw, .gtf…)".into())
+            } else if matches!(kind, Some(crate::files::Kind::Variants)) {
+                Some("VCF/BCF can't be read from a URL yet; download it with its index".into())
+            } else {
+                None
+            };
+            if form.error.is_none() {
+                if !index.is_empty() {
+                    ggv_io::set_index_for(&url, std::path::Path::new(&index));
+                }
+                self.open_paths(vec![url], ctx);
+                return;
+            }
+        }
+        if open {
+            self.open_url = Some(form);
+        }
+    }
+
     /// The review queue: the current place, its decision and note, the controls and the list.
     pub(super) fn queue_ui(&mut self, ui: &mut egui::Ui) {
         if self.queue.is_none() {

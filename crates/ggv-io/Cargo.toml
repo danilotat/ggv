@@ -13,6 +13,7 @@ pasta.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 
 [lints]
 workspace = true

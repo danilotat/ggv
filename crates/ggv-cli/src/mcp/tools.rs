@@ -196,9 +196,9 @@ fn data_tools() -> Vec<Value> {
                 "open",
                 "Set default files",
                 "Adds files to the defaults used when a call names none. Files are sorted by extension: .bam/.cram, .vcf.gz/.bcf, .gtf/.gff3/.bed, .fa/.fasta/.2bit (the reference), .bw/.bigwig/.bedgraph/.seg (signal tracks).",
-                schema(&["files"], &[json!({"files": {"type": "array", "items": {"type": "string"}}, "replace": {"type": "boolean", "description": "Replace the defaults instead of adding (default false). Attached: close the window's files not given (the reference stays unless a FASTA is given)."}})]),
+                schema(&["files"], &[json!({"files": {"type": "array", "items": {"type": "string"}, "description": "Local paths, or URLs (https://, s3://, gs://; presigned URLs too) for BAM/CRAM, FASTA, 2bit, bigWig and annotations: read by byte range, only what is asked for."}, "index": {"type": "string", "description": "The index of the one BAM/CRAM in `files`, when it isn't next to it (e.g. a presigned URL)."}, "replace": {"type": "boolean", "description": "Replace the defaults instead of adding (default false). Attached: close the window's files not given (the reference stays unless a FASTA is given)."}})]),
             );
-            open["annotations"] = json!({"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false});
+            open["annotations"] = json!({"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true});
             open
         },
         tool(
@@ -372,12 +372,13 @@ fn str_arg<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 /// (most do: said twice, the path reads as two failures).
 fn named(e: impl Into<anyhow::Error>, path: &Path) -> anyhow::Error {
     let e = e.into();
-    let shown = path.display().to_string();
+    // A URL without its query string, which can hold a presigned URL's signature.
+    let shown = ggv_io::remote::display(path);
     if format!("{e:#}").contains(&shown) { e } else { e.context(shown) }
 }
 
 fn file_name(p: &Path) -> String {
-    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+    ggv_io::remote::file_name(p)
 }
 
 fn round(x: f64, places: i32) -> f64 {
@@ -1095,6 +1096,9 @@ impl State {
                 bail!("give `files`");
             }
             let mut params = json!({"files": files});
+            if let Some(index) = str_arg(&args, "index") {
+                params["index"] = json!(index);
+            }
             if args.get("replace").and_then(Value::as_bool) == Some(true) {
                 params["replace"] = json!(true);
             }
@@ -1275,6 +1279,11 @@ warning: {}", w.join("; ")) },
         if files.is_empty() {
             bail!("give `files`");
         }
+        if let Some(index) = str_arg(args, "index") {
+            let alignments: Vec<&PathBuf> = files.iter().filter(|p| crate::kind_of(&p.to_string_lossy().to_ascii_lowercase()) == "alignments").collect();
+            let [bam] = alignments[..] else { bail!("`index` is for one alignment file; give exactly one BAM/CRAM in `files` with it") };
+            ggv_io::set_index_for(bam, Path::new(index));
+        }
         // All or nothing: check every file (it exists, is a known kind, and opens) before
         // changing the defaults, so a failed call leaves them as they were.
         let mut next = if bool_arg(args, "replace")? == Some(true) { Defaults::default() } else { self.defaults.clone() };
@@ -1285,8 +1294,8 @@ warning: {}", w.join("; ")) },
             }
         }
         for p in files {
-            if !p.exists() {
-                bail!("{} does not exist; the defaults are unchanged", p.display());
+            if !ggv_io::remote::exists(&p) {
+                bail!("{} does not exist (or can't be reached); the defaults are unchanged", ggv_io::remote::display(&p));
             }
             // Idempotent, as advertised: a file already open (by any spelling of its path) isn't
             // added again.
@@ -1305,8 +1314,8 @@ warning: {}", w.join("; ")) },
             };
             if let Err(e) = opened {
                 let e = format!("{e:#}");
-                let named = e.contains(&*p.to_string_lossy());
-                bail!("{}{e}; the defaults are unchanged", if named { String::new() } else { format!("{}: ", p.display()) });
+                let named = e.contains(&ggv_io::remote::display(&p));
+                bail!("{}{e}; the defaults are unchanged", if named { String::new() } else { format!("{}: ", ggv_io::remote::display(&p)) });
             }
         }
         self.defaults = next;
