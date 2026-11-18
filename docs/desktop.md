@@ -210,7 +210,10 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
   1 Mb bins: unfiltered, the median bin is within 1.1–1.7% of counted depth and nine in ten
   within 5.5%, in about 0.1 s for 20–40 Mb. With a MAPQ filter the median bin is within 1.6%
   and nine in ten within 10%, but single bins in repeats can still be off by a fifth to a half:
-  the index can't see MAPQ. Zoom under 5 Mb (or use `ggv query summary`) for counted depth.
+  the index can't see MAPQ. Zoom in (or use `ggv query summary`) for counted depth. Views up to
+  5 Mb are estimated the same way when the index places more than 16 MB of alignments in the
+  loaded span (deep data: past a few hundred kb on 30x short reads), so a coverage-only view
+  never reads more than that, which matters most for remote files.
 
 **Beyond IGV** — everything below is also in the **command palette** (Ctrl+K), and `?` lists
 every shortcut:
@@ -298,7 +301,7 @@ every shortcut:
 |---|---|
 | Anything | Ctrl+K, type a few letters |
 | Go to a locus | Type in the locus box (Ctrl+L): `chr17`, `chr17:41,244,435` (a base, outlined) or `chr17:41,240,000-41,250,000` |
-| Zoom | Mouse wheel (around the pointer; over rows that don't all fit, the wheel scrolls them and Ctrl+wheel zooms), `+`/`−`, double-click to zoom in (on a gene: fit the gene), or drag across the ruler or reference row to zoom to exactly what you mark |
+| Zoom | Mouse wheel (around the pointer; over rows that don't all fit, the wheel scrolls them and Ctrl+wheel zooms), `+`/`−` (Ctrl+`+`/`−` scale the interface instead), double-click to zoom in (on a gene: fit the gene), or drag across the ruler or reference row to zoom to exactly what you mark |
 | Step through variants | **< Variant** / **Variant >**, Ctrl+B / Ctrl+F |
 | Pan | Drag on the tracks (horizontal: genome; vertical: read rows), arrow keys, trackpad sideways scroll |
 | Scroll rows | Drag up/down in a track, or `↑`/`↓`, PageUp/PageDown over it |
@@ -333,8 +336,10 @@ How it stays fast:
 - **Nothing scans every loaded base per frame**: the deepest coverage in view comes from a
   per-kilobase index, splice junctions and VCF REF checks are counted once per load.
 - Wider than 5 Mb: depth estimated from the index (above), in milliseconds.
-- **Reads up to 1 Mb** by default (IGV shows 30 kb), set on the toolbar ("Reads up to"), with
-  `--read-window`, or by an agent (MCP `display`), from 10 kb to 50 Mb and remembered. Cost
+- **Reads up to 50 kb** by default (IGV shows 30 kb), set on the toolbar ("Reads up to"), with
+  **Alt+=** / **Alt+−** (one toolbar size up or down, from 10 kb to 5 Mb, shown briefly in the
+  top-right corner), with `--read-window`, or by an agent (MCP `display`), from 10 kb to 50 Mb,
+  and remembered (a size saved before 50 kb was the default still applies). Cost
   grows with the reads in view; on 35x short reads (HG003 NovaSeq, about 265,000 reads per Mb,
   one track with the reference):
 
@@ -348,7 +353,8 @@ How it stays fast:
 
   Sparse data (long reads, exomes, low-pass) goes much wider at the same cost. Tracks with more
   drawing instances than one GPU buffer holds are split across several, so no size is refused.
-- Wider than the read window: binned depth only (up to 5 Mb), counted straight from each record's
+- Wider than the read window: binned depth only (up to 5 Mb and 16 MB of alignments, else
+  estimated from the index), counted straight from each record's
   encoded CIGAR with no decoding or allocation (a 3 Mb exome span: ~0.25 s → ~0.15 s end to
   end, identical bins; `coverage_parity.rs` checks them against per-base coverage).
 - The reference row's instances are built on the loader thread too; building them on the UI

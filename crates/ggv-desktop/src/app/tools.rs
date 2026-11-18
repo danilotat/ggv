@@ -1933,6 +1933,37 @@ impl App {
     }
 
     /// The transient notice and the latest report, for the status bar.
+    /// Shows `msg` briefly over the tracks' top-right corner; a new one replaces it.
+    pub(super) fn flash(&mut self, msg: impl Into<String>) {
+        self.flash = Some((msg.into(), Instant::now()));
+    }
+
+    /// The flash message: dark grey and translucent in either theme, gone after 1.5 s (fading
+    /// over the last quarter second). Paint only: clicks go through to the tracks.
+    pub(super) fn draw_flash(&self, painter: &egui::Painter, rect: egui::Rect) {
+        const SHOW: f32 = 1.5;
+        const FADE: f32 = 0.25;
+        let Some((msg, at)) = &self.flash else { return };
+        let age = at.elapsed().as_secs_f32();
+        if age >= SHOW {
+            return;
+        }
+        let alpha = ((SHOW - age) / FADE).min(1.0);
+        let font = egui::FontId::new(15.0, crate::fonts::medium());
+        let galley = painter.layout_no_wrap(msg.clone(), font, Color32::from_rgba_unmultiplied(240, 240, 240, (255.0 * alpha) as u8));
+        let pad = egui::vec2(14.0, 9.0);
+        let size = galley.size() + 2.0 * pad;
+        let min = egui::pos2(rect.right() - 16.0 - size.x, rect.top() + 28.0);
+        let frame = egui::Rect::from_min_size(min, size);
+        painter.rect_filled(frame, 8.0, Color32::from_rgba_unmultiplied(38, 38, 40, (215.0 * alpha) as u8));
+        painter.galley(min + pad, galley, Color32::WHITE);
+        if age < SHOW - FADE {
+            painter.ctx().request_repaint_after(Duration::from_secs_f32(SHOW - FADE - age));
+        } else {
+            painter.ctx().request_repaint();
+        }
+    }
+
     pub(super) fn notice_ui(&mut self, ui: &mut egui::Ui) {
         if let Some((msg, at)) = &self.notice {
             let age = at.elapsed();

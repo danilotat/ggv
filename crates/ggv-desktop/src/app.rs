@@ -34,12 +34,13 @@ use crate::{
     util::{commas, nice_step},
 };
 
-/// Reads load for views up to this wide (IGV's visibility window).
-/// Reads are loaded for views up to this many bases (the "visibility window"); wider views
-/// show coverage only. 1 Mb by default: on 35x short reads (265k reads) panning stays above
-/// 60 fps with about 1 GB per track; 2 Mb starts to stall and 5 Mb takes 3.5 GB. People choose
-/// their own (toolbar, `--read-window`, MCP `display`), kept in `prefs.json`.
-pub const DEFAULT_READ_WINDOW: u64 = 1_000_000;
+/// Reads are loaded for views up to this many bases (IGV's "visibility window"); wider views
+/// show coverage only. 50 kb by default: a gene or two of reads, loaded in a moment even from a
+/// remote file (on 35x short reads 1 Mb is about 1 GB per track, 5 Mb 3.5 GB). People choose
+/// their own (toolbar, Alt+= / Alt+-, `--read-window`, MCP `display`), kept in `prefs.json`.
+pub const DEFAULT_READ_WINDOW: u64 = 50_000;
+/// The toolbar's sizes, which Alt+= / Alt+- step through.
+const READ_WINDOW_PRESETS: [u64; 10] = [10_000, 20_000, 30_000, 50_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000];
 pub const MIN_READ_WINDOW: u64 = 10_000;
 pub const MAX_READ_WINDOW: u64 = 50_000_000;
 static READ_WINDOW_BP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(DEFAULT_READ_WINDOW);
@@ -65,6 +66,12 @@ pub fn save_read_window(bp: u64) {
     let mut prefs = tools::load_prefs();
     prefs.insert("read_window".into(), serde_json::json!(read_window()));
     tools::save_prefs(&prefs);
+}
+
+/// The next toolbar size above (`up`) or below `bp`; `bp` itself at either end.
+fn step_read_window(bp: u64, up: bool) -> u64 {
+    let next = if up { READ_WINDOW_PRESETS.iter().find(|&&p| p > bp) } else { READ_WINDOW_PRESETS.iter().rev().find(|&&p| p < bp) };
+    next.copied().unwrap_or(bp)
 }
 
 /// `30 kb`, `1 Mb`, `2.5 Mb`.
@@ -93,8 +100,12 @@ pub(crate) struct OpenUrl {
     error: Option<String>,
 }
 
-/// Binned depth loads for views up to this wide.
+/// Binned depth loads for views up to this wide...
 const COVERAGE_WINDOW: u64 = 5_000_000;
+/// ...when the index places at most this much alignment data (compressed) in the span; denser
+/// spans show depth estimated from the index. Bounds what a coverage-only view reads: on 30x
+/// short reads this is a few hundred kb, on long reads or exomes several Mb.
+const COVERAGE_BYTES: f64 = 16.0 * 1024.0 * 1024.0;
 /// Most zoomed-in: points per base.
 const MAX_PPB: f64 = 40.0;
 const MAX_BINS: usize = 16_384;
@@ -289,6 +300,8 @@ pub struct App {
     hover_variant: Option<usize>,
     jobs: (std::sync::mpsc::Sender<tools::Apply>, std::sync::mpsc::Receiver<tools::Apply>),
     notice: Option<(String, std::time::Instant)>,
+    /// A short message over the tracks' top-right corner (a setting changed by a shortcut).
+    flash: Option<(String, std::time::Instant)>,
     watcher: crate::watch::Watcher,
     auto_reload: bool,
     /// An action for the window rather than this pane (split, link), taken by the shell.
@@ -521,6 +534,7 @@ impl App {
             hover_variant: None,
             jobs: std::sync::mpsc::channel(),
             notice: None,
+            flash: None,
             watcher: crate::watch::Watcher::spawn(ctx),
             auto_reload: true,
             shell_request: None,
@@ -1988,6 +2002,7 @@ impl App {
             mods: self.style.color == tracks::ColorBy::BaseMods,
             max_read_window: read_window() + SPAN_SLACK,
             max_coverage_window: COVERAGE_WINDOW,
+            max_coverage_bytes: COVERAGE_BYTES,
             // The app packs reads itself (sorting, grouping) on the loader thread.
             max_rows: 0,
             ..Default::default()
@@ -3062,6 +3077,7 @@ impl App {
         self.draw_affordances(&painter, &layout, response.hover_pos());
         self.draw_arranging(&painter, &layout);
         self.draw_stack_bar(&painter, &layout);
+        self.draw_flash(&painter, rect);
 
         if response.secondary_clicked()
             && let Some(p) = response.interact_pointer_pos()
@@ -3749,7 +3765,27 @@ impl App {
         let target = pointer.and_then(|p| layout.section_at(p.y)).unwrap_or(0);
         let page = layout.sections.get(target).map_or(200.0, |s| s.height() - READS_TOP);
         let step = f64::from(self.width) * 0.2 / self.ppb;
+        // Alt as the key event reports it (the frame's modifier state can miss it).
+        let alt_key = |keys: &[egui::Key]| {
+            ui.input(|i| {
+                i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. }
+                        if keys.contains(key) && (modifiers.alt || i.modifiers.alt) && !modifiers.command && !i.modifiers.command)
+                })
+            })
+        };
+        let (wider, narrower) = (alt_key(&[egui::Key::Plus, egui::Key::Equals]), alt_key(&[egui::Key::Minus]));
+        if wider || narrower {
+            let bp = step_read_window(read_window(), wider);
+            if bp != read_window() {
+                save_read_window(bp);
+            }
+            let end = if bp == read_window() && bp == step_read_window(bp, wider) { if wider { " (the largest)" } else { " (the smallest)" } } else { "" };
+            self.flash(format!("Reads shown up to {}{end}", fmt_bp(read_window())));
+        }
         let (left, right, up, down, page_up, page_down, zoom_in, zoom_out) = ui.input(|i| {
+            // Ctrl+= / Ctrl+- scale the interface, Alt+= / Alt+- change the read window.
+            let plain = !i.modifiers.alt && !i.modifiers.command;
             (
                 !i.modifiers.alt && !i.modifiers.command && i.key_pressed(egui::Key::ArrowLeft),
                 !i.modifiers.alt && !i.modifiers.command && i.key_pressed(egui::Key::ArrowRight),
@@ -3757,8 +3793,8 @@ impl App {
                 i.key_pressed(egui::Key::ArrowDown),
                 i.key_pressed(egui::Key::PageUp),
                 i.key_pressed(egui::Key::PageDown),
-                i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
-                i.key_pressed(egui::Key::Minus),
+                plain && (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)),
+                plain && i.key_pressed(egui::Key::Minus),
             )
         });
         if left {
@@ -3770,10 +3806,10 @@ impl App {
         if let Some(t) = self.tracks.get_mut(target) {
             t.scroll_y += 36.0 * (f32::from(down) - f32::from(up)) + page * (f32::from(page_down) - f32::from(page_up));
         }
-        if zoom_in {
+        if zoom_in && !wider {
             self.zoom_at(2.0, self.width / 2.0);
         }
-        if zoom_out {
+        if zoom_out && !narrower {
             self.zoom_at(0.5, self.width / 2.0);
         }
     }
@@ -4019,7 +4055,7 @@ impl App {
                     "Coverage [0-{}]{}{}",
                     commas(depth.round() as u64),
                     if scale == tracks::CoverageScale::Log { " log" } else { "" },
-                    if matches!(&*cur.coverage, Coverage::Estimated(_)) { " · estimated from the index (zoom in under 5 Mb to count)" } else { "" }
+                    if matches!(&*cur.coverage, Coverage::Estimated(_)) { " · estimated from the index (zoom in to count)" } else { "" }
                 )
             }
         };
@@ -4034,7 +4070,7 @@ impl App {
             painter.text(
                 Pos2::new(section.left() + 4.0, top + READS_TOP + 4.0),
                 Align2::LEFT_TOP,
-                format!("Zoom in to see reads (view wider than {})", fmt_bp(read_window())),
+                format!("Zoom in to see reads (view wider than {}; Alt+= shows them further out)", fmt_bp(read_window())),
                 small,
                 muted,
             );
@@ -4435,10 +4471,10 @@ impl App {
         let rw = read_window();
         let mut new = None;
         ui.menu_button(format!("Reads up to {}", fmt_bp(rw)), |ui| {
-                for bp in [30_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000] {
+                for bp in READ_WINDOW_PRESETS {
                     let hint = match bp {
                         30_000 => " (IGV's default)",
-                        1_000_000 => " (default)",
+                        DEFAULT_READ_WINDOW => " (default)",
                         5_000_000 => " (slow on deep data)",
                         _ => "",
                     };
@@ -5119,6 +5155,18 @@ mod tests {
         // 149 and 163.
         let (l, r) = outline_columns(100.0, 110.0, 1.5);
         assert_eq!((l * 1.5, r * 1.5), (149.0, 163.0));
+    }
+
+    #[test]
+    fn alt_plus_and_minus_step_through_the_toolbar_sizes() {
+        assert_eq!(step_read_window(DEFAULT_READ_WINDOW, true), 100_000);
+        assert_eq!(step_read_window(DEFAULT_READ_WINDOW, false), 30_000);
+        assert_eq!(step_read_window(75_000, true), 100_000, "a size typed in steps to the next one");
+        assert_eq!(step_read_window(75_000, false), 50_000);
+        assert_eq!(step_read_window(5_000_000, true), 5_000_000);
+        assert_eq!(step_read_window(10_000, false), 10_000);
+        assert!(READ_WINDOW_PRESETS.windows(2).all(|w| w[0] < w[1]) && READ_WINDOW_PRESETS.contains(&DEFAULT_READ_WINDOW));
+        assert!(READ_WINDOW_PRESETS[0] >= MIN_READ_WINDOW && READ_WINDOW_PRESETS[9] <= MAX_READ_WINDOW);
     }
 
     #[test]

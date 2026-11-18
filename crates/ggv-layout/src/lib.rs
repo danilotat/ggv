@@ -30,6 +30,10 @@ pub struct ViewOptions {
     pub max_read_window: u64,
     /// Binned coverage is computed only for regions up to this many bases. Default 5 Mb.
     pub max_coverage_window: u64,
+    /// ... and only when the index places at most this many (compressed) bytes of alignments
+    /// in the region; denser regions get depth estimated from the index, so a wide view of
+    /// deep data (or of a remote file) reads a bounded amount. Default: no limit.
+    pub max_coverage_bytes: f64,
     /// Rows beyond this are dropped and counted in [`Packed::hidden_reads`]. Default 100.
     pub max_rows: usize,
     /// Minimum gap between reads in one row, in bases. Default 2.
@@ -49,6 +53,7 @@ impl Default for ViewOptions {
             bins: 1200,
             max_read_window: 100_000,
             max_coverage_window: 5_000_000,
+            max_coverage_bytes: f64::INFINITY,
             max_rows: 100,
             min_gap: 2,
             tag: None,
@@ -172,15 +177,21 @@ pub fn load_view(
         });
     }
 
-    let coverage = if len <= opts.max_coverage_window {
-        let (depth, c) = binned_depth(bam, region, &opts.filters)?;
-        counts = c;
-        Coverage::Binned(depth.into_bins(opts.bins))
+    let countable = len <= opts.max_coverage_window;
+    let too_dense = countable && opts.max_coverage_bytes.is_finite() && bam.index_bytes(region).is_some_and(|b| b > opts.max_coverage_bytes);
+    let estimated = if !countable || too_dense {
+        estimate_depth(bam, region, &opts.filters, opts.bins.clamp(1, 64))?.map(|(window, depth)| Coverage::Estimated(resample(&depth, window, region, opts.bins)))
     } else {
-        match estimate_depth(bam, region, &opts.filters, opts.bins.clamp(1, 64))? {
-            Some((window, depth)) => Coverage::Estimated(resample(&depth, window, region, opts.bins)),
-            None => Coverage::Unavailable,
+        None
+    };
+    let coverage = match estimated {
+        Some(c) => c,
+        None if countable => {
+            let (depth, c) = binned_depth(bam, region, &opts.filters)?;
+            counts = c;
+            Coverage::Binned(depth.into_bins(opts.bins))
         }
+        None => Coverage::Unavailable,
     };
 
     Ok(ViewData { region: region.clone(), reference, coverage, reads: None, read_counts: counts, label })

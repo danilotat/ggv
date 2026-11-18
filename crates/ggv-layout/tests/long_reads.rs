@@ -175,3 +175,23 @@ fn panning_keeps_reads_in_their_rows() {
     eprintln!("sticky packing: {moved} of {both} changed rows");
     assert_eq!(moved, 0, "reads on screen must keep their rows");
 }
+
+/// Wide views count depth while the index says the span holds little data, and estimate it
+/// from the index past the byte budget (what the desktop's coverage-only views use).
+#[test]
+fn coverage_is_counted_within_the_byte_budget() {
+    let mut bam = ggv_io::BamFile::open(data("HG002.revio.slices.bam")).unwrap();
+    let region = bam.resolve_str("chr20:31000000-32000000").unwrap();
+    let bytes = bam.index_bytes(&region).unwrap();
+    assert!(bytes > 0.0, "the fixture has data here");
+    let mut with = |budget: f64| {
+        let opts = ViewOptions { max_read_window: 0, max_coverage_bytes: budget, bins: 100, ..Default::default() };
+        load_view(&mut bam, &region, None, String::new(), &opts).unwrap()
+    };
+    assert!(matches!(with(f64::INFINITY).coverage, ggv_layout::Coverage::Binned(_)));
+    assert!(matches!(with(bytes * 2.0).coverage, ggv_layout::Coverage::Binned(_)));
+    let over = with(bytes / 2.0);
+    let ggv_layout::Coverage::Estimated(bins) = &over.coverage else { panic!("over budget: {:?}", std::mem::discriminant(&over.coverage)) };
+    assert_eq!(bins.len(), 100);
+    assert!(bins.iter().any(|b| b.max > 0), "the estimate sees the reads");
+}

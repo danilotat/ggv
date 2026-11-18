@@ -225,6 +225,7 @@ pub fn keys_label(k: Keys) -> String {
 const OTHER_KEYS: &[(&str, &str)] = &[
     ("Left / Right", "Pan"),
     ("+ / -, mouse wheel, Ctrl+wheel", "Zoom (around the pointer); over rows that don't all fit, only Ctrl+wheel"),
+    ("Alt+= / Alt+-", "Show reads in wider / narrower views (the read window: one toolbar size up or down)"),
     ("Up / Down, PgUp / PgDn", "Scroll the rows of the track under the pointer"),
     ("Wheel over rows, their scrollbar", "Scroll reads, gene or sample rows that don't all fit"),
     ("Drag", "Pan (and scroll rows)"),

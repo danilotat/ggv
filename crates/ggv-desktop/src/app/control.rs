@@ -1897,6 +1897,39 @@ mod tests {
         assert_eq!(Some(app.locus_text.clone()), app.locus_now(), "which shows the region on screen");
     }
 
+    /// Alt+= in the window raises the read window one size and shows it over the tracks.
+    #[test]
+    fn alt_equals_raises_the_read_window_and_says_so() {
+        let dir = std::env::temp_dir().join(format!("ggv-alt-eq-{}", std::process::id()));
+        crate::store::TEST_CONFIG.with_borrow_mut(|c| *c = Some(dir.clone()));
+        let ctx = egui::Context::default();
+        let mut app = App::new(&ctx, super::super::Args::default()).unwrap();
+        app.contigs = vec![ggv_model::Contig { name: "chr20".into(), length: 64_444_167 }];
+        app.contig = 0;
+        app.pending_goto = None;
+        app.center = 31_170_000.0;
+        app.ppb = 0.5;
+        let before = super::super::read_window();
+        let alt = egui::Modifiers { alt: true, ..Default::default() };
+        let key = |pressed| egui::Event::Key { key: egui::Key::Equals, physical_key: None, pressed, repeat: false, modifiers: alt };
+        let mut frame = |events| {
+            ui_frame(&ctx, 1200.0, events, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| app.body(ui));
+            })
+        };
+        frame(vec![]);
+        let out = frame(vec![key(true), key(false)]);
+        let after = super::super::read_window();
+        super::super::set_read_window(before);
+        crate::store::TEST_CONFIG.with_borrow_mut(|c| *c = None);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(after, super::super::step_read_window(before, true));
+        let text = app.flash.as_ref().map(|(m, _)| m.clone()).expect("a flash message");
+        assert!(text.starts_with("Reads shown up to"), "{text}");
+        let painted = out.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.text() == text));
+        assert!(painted, "the message is drawn");
+    }
+
     /// The toolbar keeps the whole locus visible and stays on one row at 800, 1024 and 1366
     /// points wide, folding the chips and then Split, Evidence and Commands as it narrows.
     #[test]

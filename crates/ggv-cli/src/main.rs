@@ -256,8 +256,7 @@ struct RenderArgs {
     /// Maximum read rows; reads past this are counted but not drawn.
     #[arg(long, default_value_t = 100)]
     max_rows: usize,
-    /// Show reads only for regions up to this many bases; wider regions show coverage only (the
-    /// app's default too).
+    /// Show reads only for regions up to this many bases; wider regions show coverage only.
     #[arg(long, default_value_t = 1_000_000)]
     read_window: u64,
 }

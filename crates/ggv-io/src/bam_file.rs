@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use ggv_model::{Contig, Locus, Region};
@@ -33,6 +35,9 @@ pub struct BamFile {
     len: u64,
     /// A BAM without the BGZF end-of-file marker: probably cut short.
     missing_eof: bool,
+    /// [`BamFile::index_density`] per contig, worked out once (for a remote BAM it reads a few
+    /// block headers), shared with reopened handles.
+    density: Arc<Mutex<HashMap<usize, Option<(u64, Vec<f64>)>>>>,
 }
 
 /// The empty BGZF block every complete BAM ends with.
@@ -178,7 +183,7 @@ impl BamFile {
 
     fn new(path: PathBuf, index_path: PathBuf, inner: Inner, header: sam::Header) -> Self {
         let contigs = contigs_of(&header);
-        Self { path, reference_path: None, index_path, inner, header, contigs, len: 0, missing_eof: false }
+        Self { path, reference_path: None, index_path, inner, header, contigs, len: 0, missing_eof: false, density: Arc::default() }
     }
 
     pub fn path(&self) -> &Path {
@@ -208,6 +213,7 @@ impl BamFile {
                 contigs: self.contigs.clone(),
                 len: self.len,
                 missing_eof: self.missing_eof,
+                density: self.density.clone(),
             });
         }
         Self::open_with_index(&self.path, Some(&self.index_path), self.reference_path.as_ref())
@@ -255,6 +261,20 @@ impl BamFile {
     /// coverage at a glance; calibrate it with a small real sample to get depth.
     pub fn index_density(&self, contig: &str) -> Option<(u64, Vec<f64>)> {
         let id = self.header.reference_sequences().get_index_of(contig.as_bytes())?;
+        let mut cache = self.density.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.entry(id).or_insert_with(|| self.compute_density(id)).clone()
+    }
+
+    /// Bytes of alignment data the index places in `region` (see [`BamFile::index_density`]),
+    /// counting the windows it overlaps; `None` when the index can't tell.
+    pub fn index_bytes(&self, region: &Region) -> Option<f64> {
+        let (window, bytes) = self.index_density(&region.contig)?;
+        let w0 = (region.start / window) as usize;
+        let w1 = (region.end.div_ceil(window) as usize).min(bytes.len());
+        Some(bytes.get(w0..w1.max(w0)).map_or(0.0, |b| b.iter().sum()))
+    }
+
+    fn compute_density(&self, id: usize) -> Option<(u64, Vec<f64>)> {
         let len = self.contigs.get(id)?.length;
         match &self.inner {
             Inner::Bam { index, .. } => {

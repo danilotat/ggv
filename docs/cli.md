@@ -72,7 +72,7 @@ Renders follow IGV's conventions: coverage with allele-coloured bars where ≥20
 disagree with the reference, reads packed into rows (squished past 40 rows), mismatches
 coloured A/C/G/T and shaded by base quality, letters when zoomed in, black lines for deletions
 (labelled from 2 bp), purple bars for insertions (≥5 bp when zoomed out), and strand arrows.
-Regions wider than `--read-window` (1 Mb, as in the app) show coverage only.
+Regions wider than `--read-window` (1 Mb; the app's own default is 50 kb) show coverage only.
 
 **Batch snapshots**: a picture and an evidence report for every place in a list, with no
 window, on all cores:

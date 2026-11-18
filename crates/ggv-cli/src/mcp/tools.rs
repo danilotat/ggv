@@ -806,7 +806,7 @@ impl State {
                 "squished": {"type": "boolean"},
                 "junctions": {"type": "boolean", "description": "Splice junctions (RNA-seq) as arcs over each track's coverage, with read counts."},
                 "link_splits": {"type": "boolean", "description": "Split reads' parts on one row, joined."},
-                "read_window": {"type": "integer", "minimum": 10000, "maximum": 50000000, "description": "Show reads for views up to this many bases (the app's default is 1000000; wider views show coverage). Remembered by the app."},
+                "read_window": {"type": "integer", "minimum": 10000, "maximum": 50000000, "description": "Show reads for views up to this many bases (the app's default is 50000; wider views show coverage). Remembered by the app."},
                 "all_transcripts": {"type": "boolean"},
                 "filter": {"type": "object", "description": "For every file: min_mapq, hide_duplicates, hide_secondary, hide_supplementary, hide_qc_fail, expression (\"\" clears).", "properties": {
                     "min_mapq": {"type": "integer", "minimum": 0, "maximum": 255},
