@@ -397,8 +397,8 @@ impl App {
             let c = if header == Some(k) { pal.text } else { pal.muted };
             for col in 0..2 {
                 for row in 0..3 {
-                    let at = Pos2::new(grip.left() + 1.5 + col as f32 * 4.0, grip.top() + 2.5 + row as f32 * 4.0);
-                    painter.circle_filled(at, 1.0, c);
+                    let at = grip.center() + Vec2::new((col as f32 - 0.5) * 5.0, (row as f32 - 1.0) * 5.0);
+                    painter.circle_filled(at, 1.4, c);
                 }
             }
         }
@@ -568,12 +568,12 @@ impl Layout {
 
     /// The collapse button, just left of the close button.
     pub(super) fn collapse_button(section: Rect) -> Rect {
-        Layout::close_button(section).translate(Vec2::new(-16.0, 0.0))
+        Layout::close_button(section).translate(Vec2::new(-22.0, 0.0))
     }
 
     /// The grip drawn in a header, just left of the collapse button.
     pub(super) fn grip(section: Rect) -> Rect {
-        Rect::from_min_size(Pos2::new(Layout::collapse_button(section).left() - 12.0, section.top() + 2.0), Vec2::new(8.0, HEADER_H - 4.0))
+        Rect::from_min_size(Pos2::new(Layout::collapse_button(section).left() - 16.0, section.top() + 2.0), Vec2::new(12.0, HEADER_H - 4.0))
     }
 }
 

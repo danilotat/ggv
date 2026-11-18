@@ -376,7 +376,7 @@ impl Layout {
     }
 
     fn close_button(section: Rect) -> Rect {
-        Rect::from_min_size(Pos2::new(section.right() - 18.0, section.top() + 1.0), Vec2::new(14.0, HEADER_H - 2.0))
+        Rect::from_min_size(Pos2::new(section.right() - 24.0, section.top() + 1.0), Vec2::new(20.0, HEADER_H - 2.0))
     }
 
     /// Where track `hit` is drawn.
@@ -3120,7 +3120,7 @@ impl App {
     /// name ran underneath it). The full name is on the header's hover.
     /// It ends before `right` (what [`Self::header_rows`] leaves).
     fn header_title(&self, painter: &egui::Painter, section: Rect, text: String, right: f32) -> Rect {
-        let font = FontId::proportional(11.5);
+        let font = FontId::new(13.5, crate::fonts::medium());
         let color = self.pal().text;
         let room = (right - (section.left() + 4.0)).max(0.0);
         let mut galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
@@ -3142,9 +3142,9 @@ impl App {
     fn header_buttons(&self, painter: &egui::Painter, section: Rect, hit: Hit) {
         let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
         let fold = Layout::collapse_button(section);
-        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(14.0), self.pal().icon);
+        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(19.0), self.pal().icon);
         let close = Layout::close_button(section);
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(14.0), self.pal().icon);
+        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(19.0), self.pal().icon);
     }
 
     /// When a track's rows don't all fit: "rows 1–41 of 377" at the right of its header, before
@@ -3154,7 +3154,7 @@ impl App {
         let Some(rs) = rows else { return end };
         let (a, b) = rs.shown();
         let text = format!("{} {}–{} of {}", rs.noun, commas(a as u64), commas(b as u64), commas(rs.rows as u64));
-        let galley = painter.layout_no_wrap(text, FontId::proportional(10.5), self.pal().muted);
+        let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), self.pal().muted);
         let w = galley.size().x;
         // Only with room left for a title.
         if end - w < section.left() + 120.0 {
@@ -4075,7 +4075,7 @@ impl App {
             } else {
                 format!("{}  ({} reads in view, {} loaded)", g.label, commas(shown as u64), commas(g.reads as u64))
             };
-            let galley = rp.layout_no_wrap(label, FontId::proportional(10.5), self.pal().text);
+            let galley = rp.layout_no_wrap(label, FontId::proportional(12.0), self.pal().text);
             let at = Pos2::new(section.left() + 4.0, y + 1.0);
             rp.rect_filled(Rect::from_min_size(at - Vec2::new(2.0, 1.0), galley.size() + Vec2::new(4.0, 2.0)), 2.0, self.pal().label_bg);
             rp.galley(at, galley, self.pal().text);
@@ -4563,7 +4563,7 @@ impl App {
         if let variants::SiteColor::Info(key) = &v.color
             && !legend.is_empty()
         {
-            let font = FontId::proportional(10.5);
+            let font = FontId::proportional(12.0);
             let cy = top + HEADER_H / 2.0;
             let mut x = title.right() + 14.0;
             let galley = painter.layout_no_wrap(format!("{key}:"), font.clone(), self.pal().text);
@@ -4573,13 +4573,13 @@ impl App {
                 x += w + 6.0;
                 for (label, [r, g, b]) in legend {
                     let galley = painter.layout_no_wrap(label, font.clone(), self.pal().text);
-                    if x + 12.0 + galley.size().x > right - 2.0 {
+                    if x + 14.0 + galley.size().x > right - 2.0 {
                         break;
                     }
-                    painter.rect_filled(Rect::from_center_size(Pos2::new(x + 4.0, cy), Vec2::splat(8.0)), 1.0, Color32::from_rgb(r, g, b));
+                    painter.rect_filled(Rect::from_center_size(Pos2::new(x + 5.0, cy), Vec2::splat(10.0)), 1.0, Color32::from_rgb(r, g, b));
                     let w = galley.size().x;
-                    painter.galley(Pos2::new(x + 11.0, cy - galley.size().y / 2.0), galley, self.pal().text);
-                    x += 11.0 + w + 10.0;
+                    painter.galley(Pos2::new(x + 14.0, cy - galley.size().y / 2.0), galley, self.pal().text);
+                    x += 14.0 + w + 10.0;
                 }
             }
         }

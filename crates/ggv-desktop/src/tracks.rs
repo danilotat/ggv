@@ -9,7 +9,7 @@ use crate::gpu::{
 
 /// Vertical layout of one track's section, in points from the section's top. Each track is
 /// drawn into its own rect, so these don't depend on how many tracks are stacked above.
-pub const HEADER_H: f32 = 16.0;
+pub const HEADER_H: f32 = 22.0;
 pub const COVERAGE_TOP: f32 = HEADER_H;
 pub const COVERAGE_H: f32 = 56.0;
 pub const SEPARATOR_Y: f32 = COVERAGE_TOP + COVERAGE_H + 2.0;

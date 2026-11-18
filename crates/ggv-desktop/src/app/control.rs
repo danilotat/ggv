@@ -1630,12 +1630,12 @@ mod tests {
         let dv = app.variants[0].path.clone();
         // The person's session: heights set on a big screen.
         app.arrangement.order = vec![(Kind::Variants, dv.clone()), (Kind::Alignments, bam.clone()), (Kind::Variants, pbsv.clone()), (Kind::Genes, gtf.clone())];
-        for (k, h) in app.arrangement.order.clone().into_iter().zip([63.0, 690.0, 67.0, 92.0]) {
+        for (k, h) in app.arrangement.order.clone().into_iter().zip([69.0, 690.0, 73.0, 98.0]) {
             app.arrangement.heights.insert(k, h);
         }
         let heights = |l: &super::super::Layout| l.order.iter().map(|(_, r)| r.height()).collect::<Vec<_>>();
-        let layout = app.arrange(window(330.0));
-        assert_eq!(heights(&layout), vec![63.0, 108.0, 67.0, 92.0], "only the reads give way");
+        let layout = app.arrange(window(348.0));
+        assert_eq!(heights(&layout), vec![69.0, 108.0, 73.0, 98.0], "only the reads give way");
         assert!(layout.stack.is_none());
 
         // Smaller: the reads keep their coverage and two rows, the others give way together,

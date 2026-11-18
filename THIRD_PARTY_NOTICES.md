@@ -6,8 +6,10 @@ Every license here is permissive; where a crate offers a choice (for example `MI
 `Apache-2.0 OR GPL-2.0-only`), GGV uses it under the permissive option. The full license texts are in
 each crate's repository and in its package on crates.io.
 
-Fonts: the desktop interface uses Noto Sans Regular (Copyright 2015 Google LLC, SIL Open Font License
-1.1; licence text in `crates/ggv-desktop/fonts/OFL.txt`), bundled in `ggv-desktop`, plus the fonts
+Fonts: the desktop interface uses Figtree Regular and Medium (Copyright 2022 The Figtree Project
+Authors, SIL Open Font License 1.1; licence text in `crates/ggv-desktop/fonts/OFL-Figtree.txt`) and
+Noto Sans Regular as its fallback (Copyright 2015 Google LLC, SIL Open Font License 1.1;
+`crates/ggv-desktop/fonts/OFL-NotoSans.txt`), bundled in `ggv-desktop`, plus the fonts
 bundled with egui (`epaint_default_fonts`): Ubuntu (Ubuntu Font Licence 1.0), Hack (MIT, with
 Bitstream Vera and DejaVu notices), Noto Emoji (SIL Open Font License 1.1) and emoji-icon-font (MIT
 or Apache-2.0).
