@@ -1,4 +1,5 @@
-//! Arranging tracks: drag a track's header to move it, drag the edge between two tracks to
+//! Arranging tracks: drag a track's header to move it, collapse it to its header (the − button
+//! or a double-click on the header) to keep it open but out of the way, drag the edge between two tracks to
 //! give one's height to the other, like a splitter, using the room below the last track first
 //! (double-click the edge to go back to the automatic height). With more tracks than fit, the
 //! last track's bottom edge resizes it alone.
@@ -10,7 +11,10 @@
 //! Room the tracks don't need goes to those with more to show, alignment tracks first (see
 //! `arrange`).
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
@@ -46,11 +50,12 @@ pub enum Kind {
 
 pub type Key = (Kind, PathBuf);
 
-/// The order and sizes the person chose.
+/// The order and sizes the person chose, and which tracks they collapsed to their header.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Arrangement {
     pub order: Vec<Key>,
     pub heights: HashMap<Key, f32>,
+    pub collapsed: HashSet<Key>,
 }
 
 /// One track as saved in a session: kind, file, and its height if set.
@@ -60,6 +65,8 @@ pub struct Saved {
     pub path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
 }
 
 /// A drag in progress.
@@ -80,13 +87,24 @@ const EDGE: f32 = 4.0;
 
 impl Arrangement {
     pub fn saved(&self, present: &[Key]) -> Vec<Saved> {
-        present.iter().map(|k| Saved { kind: k.0, path: k.1.clone(), height: self.heights.get(k).copied() }).collect()
+        present
+            .iter()
+            .map(|k| Saved { kind: k.0, path: k.1.clone(), height: self.heights.get(k).copied(), collapsed: self.collapsed.contains(k) })
+            .collect()
     }
 
     pub fn from_saved(saved: &[Saved]) -> Self {
         Self {
             order: saved.iter().map(|s| (s.kind, s.path.clone())).collect(),
             heights: saved.iter().filter_map(|s| Some(((s.kind, s.path.clone()), s.height?))).collect(),
+            collapsed: saved.iter().filter(|s| s.collapsed).map(|s| (s.kind, s.path.clone())).collect(),
+        }
+    }
+
+    /// Collapses a track to its header, or opens it again (at the height it had).
+    pub fn toggle_collapsed(&mut self, key: &Key) {
+        if !self.collapsed.remove(key) {
+            self.collapsed.insert(key.clone());
         }
     }
 
@@ -122,6 +140,16 @@ impl App {
         v.chain(a).chain(s).chain(g).collect()
     }
 
+    /// The key of the track `hit` names.
+    pub(super) fn key_of(&self, hit: Hit) -> Option<Key> {
+        Some(match hit {
+            Hit::Variants(i) => (Kind::Variants, self.variants.get(i)?.path.clone()),
+            Hit::Track(i) => (Kind::Alignments, self.tracks.get(i)?.loader.bam_path.clone()),
+            Hit::Genes(i) => (Kind::Genes, self.genes.get(i)?.path.clone()),
+            Hit::Signal(i) => (Kind::Signals, self.signals.get(i)?.path.clone()),
+        })
+    }
+
     fn hit_of(&self, key: &Key) -> Option<Hit> {
         match key.0 {
             Kind::Variants => self.variants.iter().position(|v| v.path == key.1).map(Hit::Variants),
@@ -146,6 +174,9 @@ impl App {
     /// set can shrink to its kind's minimum; others keep what they need (alignment tracks that
     /// share the space, the shared minimum).
     fn floor_of(&self, key: &Key, hit: Hit) -> f32 {
+        if self.arrangement.collapsed.contains(key) {
+            return HEADER_H;
+        }
         if self.arrangement.heights.contains_key(key) {
             return min_height(key.0);
         }
@@ -231,6 +262,12 @@ impl App {
         let mut fits: Vec<Fit> = Vec::new();
         for k in keys {
             let Some(hit) = self.hit_of(&k) else { continue };
+            // Collapsed: its header alone, never squeezed or grown.
+            if self.arrangement.collapsed.contains(&k) {
+                fits.push(Fit { h: HEADER_H, min: HEADER_H, want: HEADER_H, align: false });
+                items.push((k, hit));
+                continue;
+            }
             let content = self.content_height(hit);
             let readable = self.readable_height(hit);
             let mut h = match self.arrangement.heights.get(&k).copied().or_else(|| self.natural_height(hit)) {
@@ -261,6 +298,7 @@ impl App {
             genes: vec![Rect::NOTHING; self.genes.len()],
             signals: vec![Rect::NOTHING; self.signals.len()],
             order: Vec::with_capacity(items.len()),
+            collapsed: self.arrangement.collapsed.clone(),
             stack: None,
             avail,
         };
@@ -403,6 +441,13 @@ impl App {
             self.arrangement.heights.remove(&key);
             return true;
         }
+        // Double-click a header: collapse the track to it, or open it again.
+        if response.double_clicked()
+            && let Some((key, _)) = pointer.and_then(on_header)
+        {
+            self.arrangement.toggle_collapsed(&key);
+            return true;
+        }
 
         // Where the button went down: a drag is only reported once the pointer has moved a few
         // pixels, by when it may have left a thin header or edge.
@@ -417,7 +462,7 @@ impl App {
                         self.arrangement.heights.insert(k.clone(), kr.height().round());
                     }
                 }
-                let below = layout.order.iter().skip_while(|(k, _)| *k != key).nth(1).filter(|(_, b)| (b.top() - r.bottom()).abs() < 1.0).map(|(k, b)| (k.clone(), b.height()));
+                let below = layout.order.iter().skip_while(|(k, _)| *k != key).nth(1).filter(|(k, b)| (b.top() - r.bottom()).abs() < 1.0 && !layout.collapsed.contains(k)).map(|(k, b)| (k.clone(), b.height()));
                 let room = if layout.stack.is_some() { 0.0 } else { (layout.avail - layout.order.iter().map(|(_, b)| b.height()).sum::<f32>()).max(0.0).floor() };
                 let shows = self.hit_of(&key).and_then(|hit| self.content_height(hit)).map_or(r.height(), |c| c.0);
                 let slack = if room > 0.0 { f32::INFINITY } else { (r.height() - shows).max(0.0) };
@@ -505,17 +550,30 @@ impl Layout {
 
     /// The track whose bottom edge `p` is on, if that edge resizes.
     pub(super) fn edge_at(&self, p: Pos2) -> Option<&(Key, Rect)> {
-        self.order[..self.resize_edges()].iter().find(|(_, r)| (p.y - r.bottom()).abs() <= EDGE && r.x_range().contains(p.x))
+        // A collapsed track's edge isn't a handle: it has no height to change.
+        self.order[..self.resize_edges()].iter().find(|(k, r)| (p.y - r.bottom()).abs() <= EDGE && r.x_range().contains(p.x) && !self.collapsed.contains(k))
     }
 
-    /// The track whose header (a handle for moving it) `p` is on, its close button aside.
+    /// The track whose header (a handle for moving it) `p` is on, its buttons aside.
     pub(super) fn header_at(&self, p: Pos2) -> Option<&(Key, Rect)> {
-        self.order.iter().find(|(_, r)| (r.top()..r.top() + HEADER_H).contains(&p.y) && r.x_range().contains(p.x) && !Layout::close_button(*r).contains(p))
+        self.order.iter().find(|(_, r)| {
+            (r.top()..r.top() + HEADER_H).contains(&p.y) && r.x_range().contains(p.x) && !Layout::close_button(*r).contains(p) && !Layout::collapse_button(*r).contains(p)
+        })
     }
 
-    /// The grip drawn in a header, just left of the close button.
+    /// The track whose collapse button `p` is on.
+    pub(super) fn collapse_at(&self, p: Pos2) -> Option<&(Key, Rect)> {
+        self.order.iter().find(|(_, r)| Layout::collapse_button(*r).contains(p))
+    }
+
+    /// The collapse button, just left of the close button.
+    pub(super) fn collapse_button(section: Rect) -> Rect {
+        Layout::close_button(section).translate(Vec2::new(-16.0, 0.0))
+    }
+
+    /// The grip drawn in a header, just left of the collapse button.
     pub(super) fn grip(section: Rect) -> Rect {
-        Rect::from_min_size(Pos2::new(Layout::close_button(section).left() - 12.0, section.top() + 2.0), Vec2::new(8.0, HEADER_H - 4.0))
+        Rect::from_min_size(Pos2::new(Layout::collapse_button(section).left() - 12.0, section.top() + 2.0), Vec2::new(8.0, HEADER_H - 4.0))
     }
 }
 

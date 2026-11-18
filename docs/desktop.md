@@ -19,7 +19,7 @@ none of these is the locus.
 
 Tracks stack below one shared ruler and reference row and share the locus and zoom. Each has
 its own coverage, read rows and vertical scroll. Add tracks with **Add BAM…** (several at once)
-and close one with the × in its header. BAMs may name contigs differently (`chr17` vs `17`);
+and close one with the × in its header (or collapse it to the header with −). BAMs may name contigs differently (`chr17` vs `17`);
 each track maps the view's contig through the same aliases as the CLI, and says so in its
 header when a file lacks the contig.
 
@@ -51,7 +51,7 @@ header when a file lacks the contig.
   and mate position.
 - Startup flags: `--color` (`strand`, `haplotype`, `insert-size`, `base-mods`), `--group`,
   `--sort`, `--soft-clips`.
-- Right-click a track for **Move track up / down** and **Close track**.
+- Right-click a track for **Collapse / Expand track**, **Move track up / down** and **Close track**.
 
 **Sessions** (**Session** menu): **Save as…** writes the open files, view, outlined base,
 display options and every split pane (with whether they are linked) to a small JSON file;
@@ -290,7 +290,7 @@ every shortcut:
 | Step through variants | **< Variant** / **Variant >**, Ctrl+B / Ctrl+F |
 | Pan | Drag on the tracks (horizontal: genome; vertical: read rows), arrow keys, trackpad sideways scroll |
 | Scroll rows | Drag up/down in a track, or `↑`/`↓`, PageUp/PageDown over it |
-| Arrange tracks | Drag a track's header bar to move it (a blue line shows where it lands); drag the edge between two tracks to give one's height to the other, or into the room below the last track to move the track under it (the tracks further away stay put; a height you set is kept when zooming out hides the reads; the last track's bottom edge stops at the window's bottom), double-click an edge for the automatic height. Heights saved on a bigger screen shrink to fit. Saved with the session |
+| Arrange tracks | Drag a track's header bar to move it (a blue line shows where it lands); drag the edge between two tracks to give one's height to the other, or into the room below the last track to move the track under it (the tracks further away stay put; a height you set is kept when zooming out hides the reads; the last track's bottom edge stops at the window's bottom), double-click an edge for the automatic height. The − in a header (or a double-click on the header) collapses the track to its header bar, keeping it open but out of the way; + opens it again at the height it had. Heights saved on a bigger screen shrink to fit. Saved with the session |
 | Inspect | Hover a read (name, span, strand, MAPQ, flags, mismatches, the base under the pointer) or a coverage column (depth and allele counts) |
 | Exact counts | Tick **Evidence**, click a base to outline it (again, or Esc, to clear) |
 | Region stats | Shift-drag across the tracks |

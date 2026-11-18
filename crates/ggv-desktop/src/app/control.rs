@@ -1385,6 +1385,44 @@ mod tests {
         egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, super::super::TRACKS_TOP + h))
     }
 
+    /// A collapsed track keeps only its header: its room goes to the reads, its bottom edge
+    /// isn't a handle, a drag above it doesn't resize it, and it stays collapsed through a
+    /// saved session. Opened again, it is back to the height it had.
+    #[test]
+    fn a_collapsed_track_keeps_only_its_header() {
+        if !data_dir().join("HG002.revio.slices.bam").exists() {
+            return;
+        }
+        use super::super::arrange::{Arrangement, Kind};
+        use crate::tracks::HEADER_H;
+        let ctx = egui::Context::default();
+        let mut app = gnas_with_reads(&ctx, &["HG002.revio.deepvariant.phased.vcf.gz"]);
+        let rect = window(600.0);
+        let before = app.arrange(rect);
+        let variants = before.order.iter().find(|(k, _)| k.0 == Kind::Variants).unwrap().clone();
+        let reads_h = |l: &super::super::Layout| l.order.iter().find(|(k, _)| k.0 == Kind::Alignments).unwrap().1.height();
+
+        app.arrangement.toggle_collapsed(&variants.0);
+        let after = app.arrange(rect);
+        let (_, r) = after.order.iter().find(|(k, _)| *k == variants.0).unwrap();
+        assert_eq!(r.height(), HEADER_H, "only the header");
+        assert!(reads_h(&after) >= reads_h(&before).min(app.content_height(Hit::Track(0)).unwrap().0), "the reads take the room");
+        assert!(after.edge_at(egui::pos2(500.0, r.bottom())).is_none(), "no handle under a collapsed track");
+        assert!(after.collapse_at(super::super::Layout::collapse_button(*r).center()).is_some());
+        assert!(after.header_at(super::super::Layout::collapse_button(*r).center()).is_none(), "the button isn't a grip");
+
+        let saved = app.arrangement.saved(&app.arrangement.ordered(&app.track_keys()));
+        assert!(saved.iter().any(|s| s.collapsed && s.kind == Kind::Variants));
+        let json = serde_json::to_string(&saved).unwrap();
+        assert_eq!(json.matches("collapsed").count(), 1, "only the collapsed track says so: {json}");
+        let back: Vec<super::super::arrange::Saved> = serde_json::from_str(&json).unwrap();
+        assert_eq!(Arrangement::from_saved(&back).collapsed, app.arrangement.collapsed);
+
+        app.arrangement.toggle_collapsed(&variants.0);
+        let reopened = app.arrange(rect);
+        assert_eq!(reopened.order.iter().find(|(k, _)| *k == variants.0).unwrap().1, variants.1, "back as it was");
+    }
+
     /// Room the tracks leave goes to the alignment track, whose reads don't all fit, even when
     /// every track has a height the person set (it isn't the last track): no empty band below
     /// the tracks, no stretched track with nothing to show, and no edge to find below the last.

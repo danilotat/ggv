@@ -345,6 +345,8 @@ struct Layout {
     genes: Vec<Rect>,
     /// Every track shown, top to bottom, with its key.
     order: Vec<(arrange::Key, Rect)>,
+    /// The tracks collapsed to their header.
+    collapsed: std::collections::HashSet<arrange::Key>,
     /// When the tracks don't all fit: the scrollbar along the right edge.
     stack: Option<arrange::StackBar>,
     /// The height the tracks have to share.
@@ -3079,6 +3081,10 @@ impl App {
                 Hit::Variants(i) => layout.variants[i],
                 Hit::Signal(i) => layout.signals[i],
             };
+            if Layout::collapse_button(section).contains(pos) {
+                let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
+                return Some(if collapsed { "Expand track" } else { "Collapse track to its header (or double-click the header)" }.to_owned());
+            }
             (pos.y < section.top() + HEADER_H && !Layout::close_button(section).contains(pos)).then(|| match hit {
                 Hit::Track(i) => self.tracks[i].full_title(),
                 Hit::Genes(i) => self.genes[i].path.display().to_string(),
@@ -3130,6 +3136,15 @@ impl App {
         let rect = Rect::from_min_size(at, galley.size());
         painter.galley(at, galley, color);
         rect
+    }
+
+    /// A track header's buttons: collapse ("−", or "+" to open a collapsed track) and close.
+    fn header_buttons(&self, painter: &egui::Painter, section: Rect, hit: Hit) {
+        let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
+        let fold = Layout::collapse_button(section);
+        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(14.0), self.pal().icon);
+        let close = Layout::close_button(section);
+        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(14.0), self.pal().icon);
     }
 
     /// When a track's rows don't all fit: "rows 1–41 of 377" at the right of its header, before
@@ -3422,6 +3437,13 @@ impl App {
                 self.open_filter_window(Some(i));
                 ui.close();
             }
+            if let Some(key) = self.key_of(hit) {
+                let collapsed = self.arrangement.collapsed.contains(&key);
+                if ui.button(if collapsed { "Expand track" } else { "Collapse track" }).clicked() {
+                    self.arrangement.toggle_collapsed(&key);
+                    ui.close();
+                }
+            }
             if ui.button("Move track up").clicked() {
                 self.move_track(hit, true);
                 ui.close();
@@ -3479,10 +3501,14 @@ impl App {
         if self.stack_input(ui, response, layout) {
             return;
         }
-        // Close buttons in track headers.
+        // Collapse and close buttons in track headers.
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
+            if let Some((key, _)) = layout.collapse_at(p) {
+                self.arrangement.toggle_collapsed(&key.clone());
+                return;
+            }
             if let Some(i) = layout.sections.iter().position(|s| Layout::close_button(*s).contains(p)) {
                 self.close_track(i);
                 return;
@@ -3970,8 +3996,7 @@ impl App {
         }
         let right = self.header_rows(painter, section, self.row_scroll(Hit::Track(i), section));
         self.header_title(painter, section, header, right);
-        let close = Layout::close_button(section);
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(14.0), self.pal().icon);
+        self.header_buttons(painter, section, Hit::Track(i));
 
         let Some(cur) = &t.current else { return };
         let view = &cur.view;
@@ -4225,8 +4250,7 @@ impl App {
         );
         let right = self.header_rows(painter, section, self.row_scroll(Hit::Genes(i), section));
         self.header_title(painter, section, self.gene_header(i), right);
-        let close = Layout::close_button(section);
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(14.0), self.pal().icon);
+        self.header_buttons(painter, section, Hit::Genes(i));
 
         let Some(built) = &g.built else { return };
         let rows_rect = Rect::from_min_max(Pos2::new(section.left(), top + genes::ROWS_TOP), section.max).intersect(painter.clip_rect());
@@ -4489,8 +4513,7 @@ impl App {
             }
         }
         self.header_title(painter, section, format!("Signal  ·  {}  ·  {state}", s.file_name()), Layout::grip(section).left() - 6.0);
-        let close = Layout::close_button(section);
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(14.0), self.pal().icon);
+        self.header_buttons(painter, section, Hit::Signal(i));
     }
 
     fn hover_signal(&self, response: &egui::Response, i: usize, section: Rect, pos: Pos2, vs: f64) {
@@ -4534,7 +4557,6 @@ impl App {
             format!("Variants  ·  {}  ·  {} sample{}  ·  {state}", v.file_name(), v.samples.len(), if v.samples.len() == 1 { "" } else { "s" }),
             right,
         );
-        let close = Layout::close_button(section);
         // What the site colours mean, after the title while it fits; nothing (not a bare
         // "CLNSIG:") when no loaded record has the field.
         let legend = v.legend(6);
@@ -4561,7 +4583,7 @@ impl App {
                 }
             }
         }
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(14.0), self.pal().icon);
+        self.header_buttons(painter, section, Hit::Variants(i));
 
         // Review decisions: a coloured tick above each reviewed site.
         if let Some(review) = self.review.as_ref().filter(|r| r.track == v.id)
