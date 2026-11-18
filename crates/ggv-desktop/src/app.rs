@@ -16,6 +16,7 @@ mod workspace;
 
 pub use actions::Action;
 pub use control::{API_VERSION, CAPABILITIES};
+pub use tools::load_prefs;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
@@ -115,6 +116,8 @@ const MIN_SECTION_H: f32 = 120.0;
 
 #[derive(Default)]
 pub struct Args {
+    /// Answer IGV links on this port (none: don't).
+    pub igv_port: Option<u16>,
     /// A session to open instead of the files below.
     pub session: Option<Session>,
     /// Open the built-in demo, with its tour.

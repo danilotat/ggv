@@ -111,6 +111,57 @@ impl App {
         }
     }
 
+    /// An IGV link (see `crate::igv_port`, already checked there): open `files` (each
+    /// `{"file", "index"}`) and a `genome`, keeping what is open unless `merge` is false, then
+    /// go to `locus`. What it opened is announced, so nothing loads unseen.
+    pub fn attach_link(&mut self, p: &Value, ctx: &egui::Context) -> Result<(), String> {
+        let locus = p.get("locus").and_then(Value::as_str).map(str::to_owned);
+        let mut files: Vec<PathBuf> = Vec::new();
+        for f in p.get("files").and_then(Value::as_array).into_iter().flatten() {
+            let Some(file) = f.get("file").and_then(Value::as_str) else { continue };
+            let path = PathBuf::from(file);
+            if crate::files::kind_of(file) == Some(crate::files::Kind::Variants) && ggv_io::remote::is_remote(&path) {
+                return Err(format!("{}: VCF/BCF can't be read from a URL yet; download it with its index", ggv_io::remote::display(&path)));
+            }
+            if let Some(index) = f.get("index").and_then(Value::as_str) {
+                ggv_io::set_index_for(&path, Path::new(index));
+            }
+            files.push(path);
+        }
+        let mut opened: Vec<String> = files.iter().map(|f| ggv_io::remote::file_name(f)).collect();
+        if let Some(g) = p.get("genome").and_then(Value::as_str) {
+            match ggv_io::genomes::find(g) {
+                // A built-in genome, unless it's the one open.
+                Some(genome) => {
+                    if self.build().and_then(ggv_io::genomes::find).is_none_or(|open| open.id != genome.id) {
+                        self.use_genome(genome.id, ctx);
+                        opened.insert(0, genome.name.to_owned());
+                    }
+                }
+                None => {
+                    opened.insert(0, ggv_io::remote::file_name(Path::new(g)));
+                    files.insert(0, PathBuf::from(g));
+                }
+            }
+        }
+        if !files.is_empty() {
+            let replace = p.get("merge").and_then(Value::as_bool) == Some(false);
+            self.attach_open(files, replace, ctx)?;
+        }
+        if let Some(locus) = locus {
+            if self.contigs.is_empty() {
+                // Nothing open yet (a genome downloading): go there once it is.
+                self.pending_goto = Some(locus);
+            } else {
+                self.attach_goto(&locus)?;
+            }
+        }
+        if !opened.is_empty() {
+            self.notify(format!("Opened from a link: {}", opened.join(", ")));
+        }
+        Ok(())
+    }
+
     /// Selects a region (shown, with its statistics in the Region window).
     pub fn attach_select(&mut self, text: &str) -> Result<(), String> {
         let region = self.resolve(text).map_err(|e| e.unwrap_or_else(|| format!("`{text}`: genes are still loading; try again")))?;
@@ -669,5 +720,18 @@ mod tests {
         assert_eq!(unique_file(&paths, "/data/same-b/same.bam").unwrap(), paths[1]);
         assert_eq!(unique_file(&paths, "other.bam").unwrap(), paths[2]);
         assert!(unique_file(&paths, "missing.bam").is_err());
+    }
+}
+
+#[cfg(test)]
+impl App {
+    /// The message shown at the bottom of the pane, if any.
+    pub fn notice_text(&self) -> Option<&str> {
+        self.notice.as_ref().map(|(m, _)| m.as_str())
+    }
+
+    /// Each alignment track's error, if it has one.
+    pub fn track_errors(&self) -> Vec<Option<String>> {
+        self.tracks.iter().map(|t| t.error.clone()).collect()
     }
 }

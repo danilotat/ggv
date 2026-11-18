@@ -74,6 +74,8 @@ pub struct Server {
     endpoint: Option<Endpoint>,
     shared: Arc<Shared>,
     pub commands: Receiver<Command>,
+    /// Where other listeners (IGV links) queue commands for the window.
+    sender: Sender<Command>,
 }
 
 fn new_shared() -> Arc<Shared> {
@@ -89,7 +91,7 @@ impl Server {
     /// an agent's `state` would read.
     pub fn detached() -> (Self, Sender<Command>) {
         let (tx, commands) = mpsc::channel();
-        (Self { endpoint: None, shared: new_shared(), commands }, tx)
+        (Self { endpoint: None, shared: new_shared(), commands, sender: tx.clone() }, tx)
     }
 
     pub fn snapshot(&self) -> Value {
@@ -126,6 +128,7 @@ impl Server {
         }
         let shared = new_shared();
         let (tx, commands) = mpsc::channel();
+        let sender = tx.clone();
         let (token, snap, ctx) = (endpoint.token.clone(), shared.clone(), ctx.clone());
         std::thread::Builder::new()
             .name("ggv-attach".into())
@@ -136,7 +139,12 @@ impl Server {
                 }
             })
             .ok()?;
-        Some(Self { endpoint: Some(endpoint), shared, commands })
+        Some(Self { endpoint: Some(endpoint), shared, commands, sender })
+    }
+
+    /// A sender for commands that come from elsewhere than an attached agent.
+    pub fn sender(&self) -> Sender<Command> {
+        self.sender.clone()
     }
 
     /// Logs something the person did, waking agents waiting on `events`.
@@ -230,37 +238,7 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, tx: &Sender<Command>, 
                         }
                         Err(_) => json!({"error": "window state unavailable"}),
                     },
-                    m if crate::app::CAPABILITIES.contains(&m) => {
-                        let (rtx, rrx) = mpsc::channel();
-                        let state = Arc::new(AtomicU8::new(PENDING));
-                        if tx.send(Command { method, params, reply: rtx, state: state.clone() }).is_err() {
-                            json!({"error": "the window is closing"})
-                        } else {
-                            // Commands run in the app's logic step, which eframe runs even while the
-                            // window is hidden or minimised; this wakes it.
-                            ctx.request_repaint();
-                            let answer = |r: Result<Value, String>| match r {
-                                Ok(v) => json!({"result": v}),
-                                Err(e) => json!({"error": e}),
-                            };
-                            match rrx.recv_timeout(TAKE_WAIT) {
-                                Ok(r) => answer(r),
-                                // Not taken yet: withdraw it, so it can't happen later unseen.
-                                Err(_) if state.compare_exchange(PENDING, ABANDONED, Ordering::AcqRel, Ordering::Acquire).is_ok() => json!({
-                                    "error": format!("the window didn't take the command within {} s, so it was withdrawn and not done; it's safe to retry", TAKE_WAIT.as_secs()),
-                                    "completed": false,
-                                }),
-                                // Taken and running (a large file opening): wait for it to finish.
-                                Err(_) => match rrx.recv_timeout(FINISH_WAIT) {
-                                    Ok(r) => answer(r),
-                                    Err(_) => json!({
-                                        "error": format!("the window started the command but hasn't finished after {} s; read `state` to see whether it took effect before retrying", (TAKE_WAIT + FINISH_WAIT).as_secs()),
-                                        "completed": null,
-                                    }),
-                                },
-                            }
-                        }
-                    }
+                    m if crate::app::CAPABILITIES.contains(&m) => dispatch(tx, ctx, method, params),
                     other => json!({"error": format!("unknown method `{other}`")}),
                 }
             }
@@ -269,6 +247,41 @@ fn serve(stream: TcpStream, token: &str, shared: &Shared, tx: &Sender<Command>, 
         out.push('\n');
         if writer.write_all(out.as_bytes()).is_err() {
             return;
+        }
+    }
+}
+
+/// Queues a command for the window, wakes it, and waits for its answer: `{"result": ...}` or
+/// `{"error": ...}`. A command the window hasn't taken in time is withdrawn, so it never runs
+/// late; one it has started is waited for.
+pub fn dispatch(tx: &Sender<Command>, ctx: &egui::Context, method: String, params: Value) -> Value {
+    let (rtx, rrx) = mpsc::channel();
+    let state = Arc::new(AtomicU8::new(PENDING));
+    if tx.send(Command { method, params, reply: rtx, state: state.clone() }).is_err() {
+        json!({"error": "the window is closing"})
+    } else {
+        // Commands run in the app's logic step, which eframe runs even while the
+        // window is hidden or minimised; this wakes it.
+        ctx.request_repaint();
+        let answer = |r: Result<Value, String>| match r {
+            Ok(v) => json!({"result": v}),
+            Err(e) => json!({"error": e}),
+        };
+        match rrx.recv_timeout(TAKE_WAIT) {
+            Ok(r) => answer(r),
+            // Not taken yet: withdraw it, so it can't happen later unseen.
+            Err(_) if state.compare_exchange(PENDING, ABANDONED, Ordering::AcqRel, Ordering::Acquire).is_ok() => json!({
+                "error": format!("the window didn't take the command within {} s, so it was withdrawn and not done; it's safe to retry", TAKE_WAIT.as_secs()),
+                "completed": false,
+            }),
+            // Taken and running (a large file opening): wait for it to finish.
+            Err(_) => match rrx.recv_timeout(FINISH_WAIT) {
+                Ok(r) => answer(r),
+                Err(_) => json!({
+                    "error": format!("the window started the command but hasn't finished after {} s; read `state` to see whether it took effect before retrying", (TAKE_WAIT + FINISH_WAIT).as_secs()),
+                    "completed": null,
+                }),
+            },
         }
     }
 }

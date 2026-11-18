@@ -77,6 +77,10 @@ impl Shell {
         cc.egui_ctx.set_theme(if args.style.dark { egui::Theme::Dark } else { egui::Theme::Light });
         let scripted = args.automation.is_some();
         let attach = if scripted { None } else { crate::attach::Server::start(&cc.egui_ctx) };
+        // IGV links go through the same queue as an agent's commands.
+        if let (Some(server), Some(port)) = (&attach, args.igv_port) {
+            crate::igv_port::start(port, server.sender(), &cc.egui_ctx);
+        }
         let mut shell = Self::with_pane(&cc.egui_ctx, args, linked, attach)?;
         for locus in split.into_iter().take(MAX_PANES - 1) {
             shell.split(&cc.egui_ctx, Some(locus));
@@ -398,6 +402,7 @@ impl Shell {
                 };
                 let done = match c.method.as_str() {
                     "goto" if !text.is_empty() => p.attach_goto(&text),
+                    "link" => p.attach_link(&c.params, ctx),
                     "select" if !text.is_empty() => p.attach_select(&text),
                     "unselect" => {
                         p.attach_unselect();
@@ -704,6 +709,42 @@ mod tests {
     fn test_bam() -> Option<PathBuf> {
         let bam = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/hg002-revio/HG002.revio.slices.bam");
         bam.exists().then_some(bam)
+    }
+
+    /// An IGV link opens a BAM at a URL with its index at another, goes to its locus, says
+    /// what it opened, and with `merge: false` replaces what was open.
+    #[test]
+    fn igv_links_open_urls_in_the_active_pane() {
+        let Some(bam) = test_bam() else { return };
+        let dir = bam.parent().unwrap().to_owned();
+        let (base, _) = ggv_io::remote::test_server::serve(dir.clone());
+        let elsewhere = std::env::temp_dir().join(format!("ggv-igv-link-{}", std::process::id()));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::copy(dir.join("HG002.revio.slices.bam.bai"), elsewhere.join("renamed.bai")).unwrap();
+        let (index_base, _) = ggv_io::remote::test_server::serve(elsewhere.clone());
+        let url = format!("{base}/HG002.revio.slices.bam");
+
+        let ctx = egui::Context::default();
+        let (mut shell, tx) = window(&ctx, Args { bams: vec![bam.clone()], ..Default::default() });
+        let link = json!({"files": [{"file": url, "index": format!("{index_base}/renamed.bai")}], "merge": true, "locus": "chr20:31180000-31181000", "genome": null});
+        command(&mut shell, &ctx, &tx, "link", link).0.unwrap();
+        let s = shell.panes[0].current_session();
+        assert_eq!(s.bams, vec![bam.clone(), PathBuf::from(&url)], "merged");
+        assert!(s.locus.as_deref().is_some_and(|l| l.starts_with("chr20:31180")), "{:?}", s.locus);
+        assert!(shell.panes[0].notice_text().is_some_and(|n| n.contains("Opened from a link: HG002.revio.slices.bam")));
+        assert_eq!(shell.panes[0].track_errors(), vec![None, None]);
+
+        // merge=false: the local file closes.
+        let link = json!({"files": [{"file": url, "index": null}], "merge": false, "locus": null, "genome": null});
+        command(&mut shell, &ctx, &tx, "link", link).0.unwrap();
+        assert_eq!(shell.panes[0].current_session().bams, vec![PathBuf::from(&url)]);
+
+        // goto alone; VCF at a URL isn't read yet.
+        command(&mut shell, &ctx, &tx, "link", json!({"locus": "chr20:31185000-31186000"})).0.unwrap();
+        assert!(shell.panes[0].current_session().locus.unwrap().starts_with("chr20:31185"));
+        let vcf = json!({"files": [{"file": format!("{base}/HG002.revio.pbsv.vcf.gz")}], "merge": true});
+        assert!(command(&mut shell, &ctx, &tx, "link", vcf).0.unwrap_err().contains("VCF/BCF can't be read from a URL yet"));
+        let _ = std::fs::remove_dir_all(elsewhere);
     }
 
     /// `panes` publishes like every command: the next `state` shows the panes it made or

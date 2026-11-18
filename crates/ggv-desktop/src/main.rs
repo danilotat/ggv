@@ -17,6 +17,7 @@ mod files;
 mod finder;
 mod fonts;
 mod genes;
+mod igv_port;
 mod gpu;
 mod links;
 mod loader;
@@ -130,6 +131,12 @@ struct Cli {
     /// Drive panning and zooming, print frame-time statistics, then exit (vsync off).
     #[arg(long)]
     bench: bool,
+    /// Answer IGV links (http://localhost:<port>/load?file=...) on this port instead of 60151.
+    #[arg(long, value_name = "PORT", conflicts_with = "no_igv_port")]
+    igv_port: Option<u16>,
+    /// Don't answer IGV links.
+    #[arg(long)]
+    no_igv_port: bool,
     /// Zoom all the way out and back in, then print each track's load state (and screenshot if
     /// --screenshot is given). For reproducing zoom-related bugs.
     #[arg(long)]
@@ -373,6 +380,7 @@ fn main() -> eframe::Result {
                 genome: cli.genome,
                 tracks: cli.tracks,
                 automation: automation::Automation::new(cli.screenshot, cli.bench, cli.zoom_cycle),
+                igv_port: igv_port::configured_port(cli.igv_port, cli.no_igv_port),
                 bookmarks: None,
                 overlays: None,
                 queue: cli.queue,

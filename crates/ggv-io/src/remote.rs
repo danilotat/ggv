@@ -176,6 +176,17 @@ fn check_host_with(url: &str, allow_private: bool) -> io::Result<()> {
     if allow_private {
         return Ok(());
     }
+    refuse_private(url, "start the MCP server with --allow-private-urls to allow them")
+}
+
+/// Refuses a URL whose host resolves to a loopback, private or link-local address, whatever
+/// the process-wide setting: for requests from web pages (IGV links), which must not make GGV
+/// read from this computer or its network.
+pub fn check_public(url: &str) -> io::Result<()> {
+    refuse_private(url, "links from web pages may only open data on the public internet")
+}
+
+fn refuse_private(url: &str, why: &str) -> io::Result<()> {
     let after = &url[scheme_len(url).unwrap_or(0)..];
     let authority = after.split(['/', '?', '#']).next().unwrap_or("");
     let host_port = authority.rsplit('@').next().unwrap_or(authority);
@@ -188,10 +199,7 @@ fn check_host_with(url: &str, allow_private: bool) -> io::Result<()> {
     let addrs = target.to_socket_addrs().map_err(|e| io::Error::new(e.kind(), format!("couldn't resolve {host_port}: {e}")))?;
     for a in addrs {
         if is_private(a.ip()) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("{host_port} is a private or local address; URLs that point at them are refused here (start the MCP server with --allow-private-urls to allow them)"),
-            ));
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{host_port} is a private or local address; URLs that point at them are refused here ({why})")));
         }
     }
     Ok(())

@@ -134,6 +134,18 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
   line](cli.md#files-at-a-url-s3-gcs-https)). Give the index's URL too when it isn't next to the
   file (a presigned URL); sessions remember it. On the command line, URLs go where paths do
   (`ggv-desktop https://…/x.cram -f https://…/ref.fa`, with `--index` when needed).
+- **IGV links**: while GGV is open it answers the links web pages make for IGV, such as
+  `http://localhost:60151/load?file=<url>&index=<url>&locus=chr20:1-1000&merge=true`. The
+  active pane opens the files (`file` and `index` may be comma-separated lists, in the same
+  order), keeps what is open unless `merge=false`, and goes to `locus`; `genome` takes a
+  built-in genome (`hg38`) or a FASTA/2bit URL. `/goto?locus=…` moves the view, `/echo` answers
+  `echo`. Whatever a link opens is announced at the bottom of the window. Because any web page
+  can send these, links only open data at public `https://`, `s3://` or `gs://` addresses: local
+  files and private or local network addresses are refused, and so is a request whose `Host`
+  isn't `localhost`. The port is 60151, as in IGV, so with IGV running too, whichever started
+  first gets the links. Change it with `--igv-port <n>` or `GGV_IGV_PORT=<n>`; turn it off with
+  `--no-igv-port`, `GGV_IGV_PORT=off`, or `"igv_port": false` in GGV's `prefs.json`. IGV's
+  batch commands over the socket (`goto`, `snapshot`… for scripts) aren't supported yet.
 - **Open files** by dropping them on the window (BAM/CRAM, VCF/BCF, annotations, a FASTA as the
   reference, or a session `.json`), from **Session → Recent files**, or the toolbar buttons. A
   file without an index gets an offer to build one (BAI, falling back to CSI for long contigs;

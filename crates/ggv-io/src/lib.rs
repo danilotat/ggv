@@ -12,6 +12,7 @@ pub mod catalog;
 pub mod demo;
 pub mod folders;
 pub mod genomes;
+pub mod igv_link;
 mod indexing;
 pub mod places;
 pub mod remote;
