@@ -8,12 +8,10 @@ license.workspace = true
 
 [dependencies]
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+ggv-io.workspace = true
 ggv-model.workspace = true
 memchr = "2"
 thiserror.workspace = true
-
-[dev-dependencies]
-ggv-io.workspace = true
 
 [lints]
 workspace = true

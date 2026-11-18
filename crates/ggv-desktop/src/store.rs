@@ -118,12 +118,13 @@ fn fallback_dir() -> Option<PathBuf> {
 /// A name for `data`'s decisions outside its folder: its file name plus a short hash of its
 /// full path, so two `calls.vcf.gz` in different folders don't share decisions.
 fn elsewhere(dir: &Path, data: &Path, ext: &str) -> PathBuf {
-    let full = std::path::absolute(data).unwrap_or_else(|_| data.to_path_buf());
+    // A URL by its address without the query, which for a presigned URL changes each time.
+    let full = if ggv_io::remote::is_remote(data) { ggv_io::remote::display(data) } else { std::path::absolute(data).unwrap_or_else(|_| data.to_path_buf()).to_string_lossy().into_owned() };
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in full.to_string_lossy().bytes() {
+    for b in full.bytes() {
         h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
     }
-    let name = data.file_name().map_or_else(|| "data".into(), |n| n.to_string_lossy().into_owned());
+    let name = ggv_io::remote::file_name(data);
     dir.join(format!("{name}.{:08x}.{ext}", h as u32))
 }
 
@@ -134,7 +135,10 @@ fn candidates(data: &Path, ext: &str) -> Vec<PathBuf> {
     if let Some(d) = output_dir() {
         v.push(elsewhere(&d, data, ext));
     }
-    v.push(data.with_added_extension(ext));
+    // Nothing can be written next to a remote file.
+    if !ggv_io::remote::is_remote(data) {
+        v.push(data.with_added_extension(ext));
+    }
     if let Some(d) = fallback_dir() {
         v.push(elsewhere(&d, data, ext));
     }
@@ -147,7 +151,8 @@ fn candidates(data: &Path, ext: &str) -> Vec<PathBuf> {
 static LOCATED: std::sync::Mutex<BTreeMap<(PathBuf, String), PathBuf>> = std::sync::Mutex::new(BTreeMap::new());
 
 fn located_key(data: &Path, ext: &str) -> (PathBuf, String) {
-    (std::path::absolute(data).unwrap_or_else(|_| data.to_path_buf()), ext.to_owned())
+    let key = if ggv_io::remote::is_remote(data) { data.to_path_buf() } else { std::path::absolute(data).unwrap_or_else(|_| data.to_path_buf()) };
+    (key, ext.to_owned())
 }
 
 /// Where `data`'s decisions were last saved in this process, if they were.

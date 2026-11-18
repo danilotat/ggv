@@ -49,6 +49,10 @@ pub struct Session {
     /// Per-file filter expressions that replace the shared one for that track.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub track_filters: std::collections::BTreeMap<PathBuf, String>,
+    /// Indexes kept somewhere other than next to their alignment file (a presigned URL, given
+    /// in Open URL), by alignment file.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub indexes: std::collections::BTreeMap<PathBuf, PathBuf>,
     /// Variant tracks coloured other than their default: `af`, or an INFO key (`CLNSIG`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub variant_colors: std::collections::BTreeMap<PathBuf, String>,
@@ -266,7 +270,10 @@ impl Session {
         if let Some(dir) = path.parent() {
             // Normalised: saved relative paths use `/`, which joined to a Windows folder gave
             // mixed separators that agents' spellings of the same file didn't match.
-            s.map_paths(|p| crate::files::normalize(&if p.is_relative() && !p.as_os_str().is_empty() { dir.join(p) } else { p.to_path_buf() }));
+            s.map_paths(|p| {
+                let relative = p.is_relative() && !p.as_os_str().is_empty() && !ggv_io::remote::is_remote(p);
+                crate::files::normalize(&if relative { dir.join(p) } else { p.to_path_buf() })
+            });
         }
         Ok(s)
     }
@@ -295,6 +302,7 @@ impl Session {
             *r = f(r);
         }
         self.track_filters = std::mem::take(&mut self.track_filters).into_iter().map(|(p, e)| (f(&p), e)).collect();
+        self.indexes = std::mem::take(&mut self.indexes).into_iter().map(|(p, i)| (f(&p), f(&i))).collect();
         self.variant_colors = std::mem::take(&mut self.variant_colors).into_iter().map(|(p, e)| (f(&p), e)).collect();
         for t in &mut self.track_layout {
             t.path = f(&t.path);
@@ -305,7 +313,7 @@ impl Session {
     pub fn missing(&self) -> Vec<PathBuf> {
         let mut all: Vec<&PathBuf> = self.bams.iter().chain(&self.vcfs).chain(&self.genes).chain(&self.signals).collect();
         all.extend(&self.reference);
-        all.into_iter().filter(|p| !p.exists()).cloned().collect()
+        all.into_iter().filter(|p| !ggv_io::remote::is_present(p)).cloned().collect()
     }
 
     /// Replaces `old` with `new` wherever the session names it.
@@ -333,6 +341,9 @@ impl Session {
         let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).and_then(|d| std::path::absolute(d).ok());
         if let Some(dir) = dir {
             s.map_paths(|p| {
+                if ggv_io::remote::is_remote(p) {
+                    return p.to_path_buf();
+                }
                 let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
                 // Relative paths use `/`, which every platform reads, so a project folder moves
                 // between Windows, macOS and Linux.

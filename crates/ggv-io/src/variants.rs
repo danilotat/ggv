@@ -268,6 +268,9 @@ pub struct VariantFile {
 impl VariantFile {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_owned();
+        if crate::remote::is_remote(&path) {
+            return Err(Error::Io { path, cause: std::io::Error::new(std::io::ErrorKind::Unsupported, "VCF/BCF can't be read from a URL yet (BAM, CRAM, FASTA, 2bit, bigWig and annotations can); download it with its index") });
+        }
         let p = path.to_string_lossy().into_owned();
         let io_err = |e: std::io::Error| Error::Io { path: path.clone(), cause: e };
         let mut reader = Reader::open(&p, 0).map_err(|e| io_err(std::io::Error::other(e.to_string())))?;

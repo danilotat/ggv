@@ -13,6 +13,8 @@ pub enum Kind {
 }
 
 pub fn kind_of(name: &str) -> Option<Kind> {
+    // A URL's query string (a presigned URL's signature) isn't part of the name.
+    let name = if ggv_io::remote::is_remote(std::path::Path::new(name)) { ggv_io::remote::redact(name) } else { name };
     let lower = name.to_ascii_lowercase();
     let base = lower.trim_end_matches(".gz").trim_end_matches(".bgz");
     if ggv_io::signal::is_signal(&lower) {
@@ -94,6 +96,10 @@ pub fn display_name(p: &Path) -> String {
 /// `p` rebuilt from its components: one separator throughout (`C:/x\y/z` on Windows is
 /// `C:\x\y\z`), without `.` parts. Reads nothing from disk.
 pub fn normalize(p: &Path) -> PathBuf {
+    // A URL isn't a path: rebuilding it from components would turn `https://` into `https:/`.
+    if ggv_io::remote::is_remote(p) {
+        return p.to_path_buf();
+    }
     p.components().collect()
 }
 

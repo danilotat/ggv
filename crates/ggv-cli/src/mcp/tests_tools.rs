@@ -773,3 +773,34 @@ fn repeats_warn_when_the_region_is_narrower_than_the_tract() {
     assert!(tract["files"][0]["warning"].is_null() && tract["files"][0]["spanning"] == 10, "{tract}");
     assert_eq!(tract["files"][0]["alleles"].as_array().map(Vec::len), Some(2), "{tract}");
 }
+
+#[test]
+fn urls_answer_like_local_files() {
+    // The fixture served over HTTP by a local range server: the same summary as from disk,
+    // with the index given separately (as for a presigned URL) through `open`.
+    let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/hg002-revio");
+    if !data.join("HG002.revio.slices.bam").exists() {
+        return;
+    }
+    let d = Dir::new("urls");
+    std::fs::copy(data.join("HG002.revio.slices.bam"), d.file("x.bam")).unwrap();
+    std::fs::copy(data.join("HG002.revio.slices.bam.bai"), d.file("elsewhere.bai")).unwrap();
+    for name in ["GRCh38.chr20.slices.fa.gz", "GRCh38.chr20.slices.fa.gz.fai", "GRCh38.chr20.slices.fa.gz.gzi"] {
+        std::fs::copy(data.join(name), d.file(name)).unwrap();
+    }
+    let (base, _) = ggv_io::remote::test_server::serve(d.0.clone());
+    let region = json!("chr20:31165000-31185000");
+    let mut local = server(Defaults { bams: vec![data.join("HG002.revio.slices.bam")], reference: Some(data.join("GRCh38.chr20.slices.fa.gz")), ..Default::default() });
+    let want = call(&mut local, "summarize", json!({"region": region})).unwrap();
+
+    let mut far = server(Defaults::default());
+    let bam = format!("{base}/x.bam?sig=1");
+    let e = call(&mut far, "open", json!({"files": [bam]})).unwrap_err();
+    assert!(e.contains("no index") && !e.contains("sig=1"), "{e}");
+    let opened = call(&mut far, "open", json!({"files": [bam, format!("{base}/GRCh38.chr20.slices.fa.gz")], "index": format!("{base}/elsewhere.bai")}));
+    assert!(opened.is_ok(), "{opened:?}");
+    let got = call(&mut far, "summarize", json!({"region": region})).unwrap();
+    for key in ["reads", "mean_depth", "breadth", "variable_sites"] {
+        assert_eq!(got[key], want[key], "{key}");
+    }
+}

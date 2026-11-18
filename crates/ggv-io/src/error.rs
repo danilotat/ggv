@@ -4,10 +4,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{path}: {cause}")]
+    #[error("{}: {cause}", crate::remote::display(path))]
     Io { path: PathBuf, cause: io::Error },
 
-    #[error("{path}: no index found (looked for {tried}); {how}")]
+    #[error("{}: no index found (looked for {tried}); {how}", crate::remote::display(path))]
     MissingIndex { path: PathBuf, tried: String, how: String },
 
     #[error("invalid locus `{text}`: {cause}")]
@@ -18,7 +18,7 @@ pub enum Error {
     #[error("contig `{name}` is not in {} (it has e.g. {})", file.as_deref().unwrap_or("this file"), examples.join(", "))]
     UnknownContig { name: String, examples: Vec<String>, file: Option<String> },
 
-    #[error("{path}: not a BAM file{hint}: {cause}")]
+    #[error("{}: not a BAM file{hint}: {cause}", crate::remote::display(path))]
     NotAlignments { path: PathBuf, hint: &'static str, cause: io::Error },
 
     #[error("{locus} starts past the end of {contig} (length {length})")]
@@ -31,7 +31,7 @@ impl Error {
     pub fn in_reference(self, path: &std::path::Path) -> Self {
         match self {
             Self::UnknownContig { name, examples, file: None } => {
-                let file = Some(format!("the reference {}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()));
+                let file = Some(format!("the reference {}", crate::remote::file_name(path)));
                 Self::UnknownContig { name, examples, file }
             }
             other => other,

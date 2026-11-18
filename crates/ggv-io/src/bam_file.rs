@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     io,
     path::{Path, PathBuf},
 };
@@ -16,6 +15,7 @@ use pasta::{
 use crate::{
     Result,
     error::{Error, IoContext},
+    remote::{self, Source},
     resolve_locus,
 };
 
@@ -45,7 +45,7 @@ fn ends_with_eof_marker(path: &Path, len: u64) -> bool {
     use std::io::{Read, Seek, SeekFrom};
     let mut tail = [0u8; 28];
     len >= 28
-        && File::open(path).and_then(|mut f| {
+        && Source::open(path).and_then(|mut f| {
             f.seek(SeekFrom::Start(len - 28))?;
             f.read_exact(&mut tail)
         }).is_ok()
@@ -54,13 +54,21 @@ fn ends_with_eof_marker(path: &Path, len: u64) -> bool {
 
 enum Inner {
     /// The index is shared between handles on the same file ([`BamFile::reopen`]).
-    Bam { reader: bam::io::Reader<bgzf::io::Reader<File>>, index: std::sync::Arc<bam::Index> },
+    Bam { reader: bam::io::Reader<bgzf::io::Reader<Source>>, index: std::sync::Arc<bam::Index> },
     /// `has_reference`: records can't be decoded without it (the header can).
-    Cram { reader: cram::io::Reader<File>, index: cram::crai::Index, has_reference: bool },
+    Cram { reader: cram::io::Reader<Source>, index: cram::crai::Index, has_reference: bool },
 }
 
 fn is_cram(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cram"))
+    remote::file_name(path).to_ascii_lowercase().ends_with(".cram")
+}
+
+/// Opens a local file or URL, failing for a folder.
+fn open_source(path: &Path) -> Result<Source> {
+    if !remote::is_remote(path) && std::fs::metadata(path).at(path)?.is_dir() {
+        return Err(Error::Io { path: path.to_owned(), cause: std::io::Error::other("is a folder, not an alignment file") });
+    }
+    Source::open(path).at(path)
 }
 
 fn contigs_of(header: &sam::Header) -> Vec<Contig> {
@@ -77,7 +85,7 @@ fn info_of(path: &Path, index: String, header: &sam::Header) -> BamInfo {
             platform: rg.other_fields().get(&rg_tag::PLATFORM).map(|v| v.to_string()),
         })
         .collect();
-    BamInfo { path: path.display().to_string(), index, contigs: contigs_of(header), read_groups }
+    BamInfo { path: remote::display(path), index, contigs: contigs_of(header), read_groups }
 }
 
 /// What an agent or UI needs to know about a BAM before querying it.
@@ -104,48 +112,64 @@ impl BamFile {
     }
 
     /// Opens a BAM, or a CRAM with the indexed FASTA it was compressed against (`.crai` index
-    /// next to it). The reference is ignored for BAM.
+    /// next to it). The reference is ignored for BAM. Either may be a URL ([`crate::remote`]).
     pub fn open_with_reference(path: impl AsRef<Path>, reference: Option<impl AsRef<Path>>) -> Result<Self> {
+        Self::open_with_index(path, None::<&Path>, reference)
+    }
+
+    /// [`Self::open_with_reference`] with the index at `index` instead of next to the file:
+    /// for a presigned URL or a portal that keeps the index elsewhere (IGV's "index URL").
+    pub fn open_with_index(path: impl AsRef<Path>, index: Option<impl AsRef<Path>>, reference: Option<impl AsRef<Path>>) -> Result<Self> {
         let path = path.as_ref().to_owned();
+        let registered = crate::index_for(&path);
+        let index = index.as_ref().map(AsRef::as_ref).or(registered.as_deref());
         // The file itself first: a missing BAM is not a missing index.
-        let meta = std::fs::metadata(&path).at(&path)?;
-        if meta.is_dir() {
-            return Err(Error::Io { path, cause: std::io::Error::other("is a folder, not an alignment file") });
-        }
+        let source = open_source(&path)?;
+        let len = source.len().at(&path)?;
         if is_cram(&path) {
-            return Self::open_cram(path, reference.as_ref().map(AsRef::as_ref));
+            return Self::open_cram(path, source, index, reference.as_ref().map(AsRef::as_ref));
         }
         // The header before the index: a file that isn't a BAM at all is told so, not asked
         // for an index it could never have.
-        let mut reader = File::open(&path).map(bam::io::Reader::new).at(&path)?;
+        let mut reader = bam::io::Reader::new(source);
         let header = reader.read_header().map_err(|cause| Error::NotAlignments { hint: other_kind(&path), path: path.clone(), cause })?;
-        let (index, index_path) = read_index(&path)?;
+        let (index, index_path) = match index {
+            Some(i) => (read_bam_index(i)?, i.to_owned()),
+            None => read_index(&path)?,
+        };
         let mut file = Self::new(path, index_path, Inner::Bam { reader, index: std::sync::Arc::new(index) }, header);
-        file.len = meta.len();
+        file.len = len;
         file.missing_eof = !ends_with_eof_marker(&file.path, file.len);
         Ok(file)
     }
 
-    fn open_cram(path: PathBuf, reference: Option<&Path>) -> Result<Self> {
-        if let Some(r) = reference.filter(|r| r.to_string_lossy().to_ascii_lowercase().ends_with(".2bit")) {
+    fn open_cram(path: PathBuf, source: Source, index: Option<&Path>, reference: Option<&Path>) -> Result<Self> {
+        if let Some(r) = reference.filter(|r| remote::file_name(r).to_ascii_lowercase().ends_with(".2bit")) {
             return Err(Error::Io { path: r.to_owned(), cause: std::io::Error::other("CRAM decoding needs the reference as FASTA (.fa with .fai); a .2bit works for BAM") });
         }
-        let candidates = [path.with_added_extension("crai"), path.with_extension("crai")];
-        let Some(index_path) = candidates.iter().find(|p| p.exists()).cloned() else {
-            return Err(Error::MissingIndex { path: path.clone(), tried: "x.cram.crai, x.crai".into(), how: INDEX_HOW.into() });
-        };
-        let index = cram::crai::fs::read(&index_path).at(&index_path)?;
-        let repository = match reference {
-            Some(r) => {
-                let fasta_reader = fasta::io::indexed_reader::Builder::default().build_from_path(r).at(r)?;
-                fasta::Repository::new(fasta::repository::adapters::IndexedReader::new(fasta_reader))
+        let (index, index_path) = match index {
+            Some(i) => (read_crai(i)?, i.to_owned()),
+            None => {
+                let candidates = [remote::with_added_extension(&path, "crai"), remote::with_extension(&path, "crai")];
+                let mut found = None;
+                for c in &candidates {
+                    match read_crai(c) {
+                        Ok(ix) => {
+                            found = Some((ix, c.clone()));
+                            break;
+                        }
+                        Err(Error::Io { cause, .. }) if is_missing(&cause) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
+                found.ok_or_else(|| Error::MissingIndex { path: path.clone(), tried: "x.cram.crai, x.crai".into(), how: index_how(&path) })?
             }
+        };
+        let repository = match reference {
+            Some(r) => fasta::Repository::new(fasta::repository::adapters::IndexedReader::new(crate::reference::indexed_fasta(r)?)),
             None => fasta::Repository::default(),
         };
-        let mut reader = cram::io::reader::Builder::default()
-            .set_reference_sequence_repository(repository)
-            .build_from_path(&path)
-            .at(&path)?;
+        let mut reader = cram::io::reader::Builder::default().set_reference_sequence_repository(repository).build_from_reader(source);
         let header = reader.read_header().at(&path)?;
         let mut file = Self::new(path, index_path, Inner::Cram { reader, index, has_reference: reference.is_some() }, header);
         file.reference_path = reference.map(Path::to_owned);
@@ -164,7 +188,7 @@ impl BamFile {
     /// A warning when the file looks cut short (a BAM without its end-of-file marker). Reads
     /// the index places past the end are an error when queried; this flags the rest.
     pub fn warning(&self) -> Option<String> {
-        self.missing_eof.then(|| format!("{}: no BGZF end-of-file marker; the file may be truncated (an incomplete download or copy?)", self.path.display()))
+        self.missing_eof.then(|| format!("{}: no BGZF end-of-file marker; the file may be truncated (an incomplete download or copy?)", remote::display(&self.path)))
     }
 
     /// The same file opened again (with the same reference): another handle for another
@@ -173,7 +197,7 @@ impl BamFile {
         // A BAM's parsed index and header are shared, not read again: chunked passes reopen the
         // file for every thread on every wide load, and a whole-genome index is tens of MB.
         if let Inner::Bam { index, .. } = &self.inner {
-            let mut reader = File::open(&self.path).map(bam::io::Reader::new).at(&self.path)?;
+            let mut reader = Source::open(&self.path).map(bam::io::Reader::new).at(&self.path)?;
             reader.read_header().at(&self.path)?; // positions the reader past the header
             return Ok(Self {
                 path: self.path.clone(),
@@ -186,7 +210,7 @@ impl BamFile {
                 missing_eof: self.missing_eof,
             });
         }
-        Self::open_with_reference(&self.path, self.reference_path.as_ref())
+        Self::open_with_index(&self.path, Some(&self.index_path), self.reference_path.as_ref())
     }
 
     pub fn header(&self) -> &sam::Header {
@@ -207,20 +231,18 @@ impl BamFile {
     }
 
     pub fn info(&self) -> BamInfo {
-        info_of(&self.path, self.index_path.display().to_string(), &self.header)
+        info_of(&self.path, remote::display(&self.index_path), &self.header)
     }
 
     /// [`Self::info`] from the header alone, with index `none`: for a file without an index
     /// (unaligned or unsorted reads can't have one), which [`Self::open`] refuses.
     pub fn header_info(path: impl AsRef<Path>) -> Result<BamInfo> {
         let path = path.as_ref();
-        if std::fs::metadata(path).at(path)?.is_dir() {
-            return Err(Error::Io { path: path.to_owned(), cause: std::io::Error::other("is a folder, not an alignment file") });
-        }
+        let source = open_source(path)?;
         let header = if is_cram(path) {
-            cram::io::reader::Builder::default().build_from_path(path).at(path)?.read_header().at(path)?
+            cram::io::reader::Builder::default().build_from_reader(source).read_header().at(path)?
         } else {
-            let mut reader = File::open(path).map(bam::io::Reader::new).at(path)?;
+            let mut reader = bam::io::Reader::new(source);
             reader.read_header().map_err(|cause| Error::NotAlignments { hint: other_kind(path), path: path.to_owned(), cause })?
         };
         Ok(info_of(path, "none".into(), &header))
@@ -409,7 +431,7 @@ fn compression_ratio(path: &Path, offsets: &[bgzf::VirtualPosition]) -> Option<f
         return None;
     }
     let step = starts.len().div_ceil(32);
-    let mut file = File::open(path).ok()?;
+    let mut file = Source::open(path).ok()?;
     let (mut compressed, mut uncompressed) = (0u64, 0u64);
     for &c in starts.iter().step_by(step) {
         let mut header = [0u8; 18];
@@ -432,10 +454,39 @@ fn compression_ratio(path: &Path, offsets: &[bgzf::VirtualPosition]) -> Option<f
 /// How to get the index an alignment file lacks.
 const INDEX_HOW: &str = "create one with `ggv index` (or `samtools index`)";
 
+fn index_how(path: &Path) -> String {
+    if remote::is_remote(path) {
+        "if the index is somewhere else (a presigned URL, say), give it with --index (MCP: `index`; in the app, the Open URL dialog)".into()
+    } else {
+        INDEX_HOW.into()
+    }
+}
+
+/// A missing index candidate: skipped, as the next one may exist. A bucket that doesn't allow
+/// listing answers 403 for a missing key, so a 403 counts as missing too.
+fn is_missing(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::NotFound || (e.kind() == io::ErrorKind::PermissionDenied && e.to_string().contains("HTTP"))
+}
+
+fn read_crai(path: &Path) -> Result<cram::crai::Index> {
+    let bytes = remote::read_whole(path).at(path)?;
+    cram::crai::io::Reader::new(&bytes[..]).read_index().at(path)
+}
+
+/// A BAI or CSI index, told apart by their first bytes (`BAI\x01`, or gzip for CSI).
+fn read_bam_index(path: &Path) -> Result<bam::Index> {
+    let bytes = remote::read_whole(path).at(path)?;
+    if bytes.starts_with(&[0x1f, 0x8b]) {
+        csi::io::Reader::new(&bytes[..]).read_index().map(bam::Index::Csi).at(path)
+    } else {
+        bai::io::Reader::new(&bytes[..]).read_index().map(bam::Index::Bai).at(path)
+    }
+}
+
 /// What a file that failed to open as a BAM looks like instead, from its name: said after
 /// "not a BAM file".
 fn other_kind(path: &Path) -> &'static str {
-    let name = path.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+    let name = remote::file_name(path).to_ascii_lowercase();
     let ends = |exts: &[&str]| exts.iter().any(|e| name.ends_with(e));
     if ends(&[".vcf", ".vcf.gz", ".vcf.bgz", ".bcf"]) {
         " (it is named as a variant file)"
@@ -453,23 +504,18 @@ fn other_kind(path: &Path) -> &'static str {
 }
 
 fn read_index(bam: &Path) -> Result<(bam::Index, PathBuf)> {
-    let mut candidates = vec![(bam.with_added_extension("bai"), false), (bam.with_added_extension("csi"), true)];
+    let mut candidates = vec![remote::with_added_extension(bam, "bai"), remote::with_added_extension(bam, "csi")];
     // `x.bai` beside `x.bam`; a name without an extension has that one already.
-    let sibling = bam.with_extension("bai");
-    if sibling != candidates[0].0 {
-        candidates.push((sibling, false));
+    let sibling = remote::with_extension(bam, "bai");
+    if sibling != candidates[0] {
+        candidates.push(sibling);
     }
 
-    for (candidate, is_csi) in &candidates {
-        let result = if *is_csi {
-            csi::fs::read(candidate).map(bam::Index::Csi)
-        } else {
-            bai::fs::read(candidate).map(bam::Index::Bai)
-        };
-        match result {
+    for candidate in &candidates {
+        match read_bam_index(candidate) {
             Ok(index) => return Ok((index, candidate.clone())),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(Error::Io { path: candidate.clone(), cause: e }),
+            Err(Error::Io { cause, .. }) if is_missing(&cause) => continue,
+            Err(e) => return Err(e),
         }
     }
 
@@ -477,10 +523,10 @@ fn read_index(bam: &Path) -> Result<(bam::Index, PathBuf)> {
         path: bam.to_owned(),
         tried: candidates
             .iter()
-            .map(|(p, _)| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .map(|p| remote::file_name(p))
             .collect::<Vec<_>>()
             .join(", "),
-        how: INDEX_HOW.into(),
+        how: index_how(bam),
     })
 }
 

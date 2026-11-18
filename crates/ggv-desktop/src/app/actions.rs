@@ -22,6 +22,7 @@ pub enum Action {
     AddBam,
     AddVcf,
     AddGenes,
+    OpenUrl,
     SetReference,
     SaveSession,
     OpenSession,
@@ -82,7 +83,7 @@ impl Action {
     pub fn all() -> Vec<Self> {
         use Action::*;
         let mut v = vec![
-            Palette, Shortcuts, GoToLocus, Back, Forward, ZoomIn, ZoomOut, AddBam, AddVcf, AddGenes, SetReference, SaveSession,
+            Palette, Shortcuts, GoToLocus, Back, Forward, ZoomIn, ZoomOut, AddBam, AddVcf, AddGenes, OpenUrl, SetReference, SaveSession,
             OpenSession, RestoreSession, ExportPng, CopyImage, CopyLink, CopyCommand, CopyFasta, CopySam, Report, AddBookmark,
             Bookmarks, ExportBookmarks, QueueOpen, QueuePaste, QueueStop, ReviewVariants, NextVariant, PrevVariant, Filter,
             ClearFilter, FindRead, SeqSearch, Compare, NextDiff, PrevDiff, ToggleEvidence, ToggleSquish, ToggleSoftClips,
@@ -116,6 +117,7 @@ impl Action {
             AddBam => "Open alignments (BAM/CRAM)…".into(),
             AddVcf => "Open variants (VCF/BCF)…".into(),
             AddGenes => "Open gene annotation (GTF/GFF/BED)…".into(),
+            OpenUrl => "Open a URL (https://, s3://, gs://)…".into(),
             SetReference => "Open reference FASTA…".into(),
             SaveSession => "Save session as…".into(),
             OpenSession => "Open session…".into(),
@@ -337,6 +339,10 @@ impl App {
             Bookmarks => self.show_bookmarks = !self.show_bookmarks,
             ExportBookmarks => self.export_bookmarks(),
             QueueOpen => self.open_queue_dialog(),
+            OpenUrl => {
+                self.open_url = Some(super::OpenUrl::default());
+                ctx.memory_mut(|m| m.data.insert_temp(egui::Id::unique("open-url-focus"), true));
+            }
             QueuePaste => {
                 self.paste_queue = Some(String::new());
                 ctx.memory_mut(|m| m.data.insert_temp(egui::Id::unique("paste-queue-focus"), true));

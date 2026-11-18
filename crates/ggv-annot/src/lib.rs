@@ -165,9 +165,14 @@ impl Annotation {
     /// optionally followed by `.gz`/`.bgz`).
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let err = |cause| Error::Io { path: path.display().to_string(), cause };
-        let file = File::open(path).map_err(err)?;
-        let name = path.file_name().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
+        let err = |cause| Error::Io { path: ggv_io::remote::display(path), cause };
+        // A remote annotation has no index to read parts of: it is fetched whole.
+        let file: Box<dyn Read + Send> = if ggv_io::remote::is_remote(path) {
+            Box::new(std::io::Cursor::new(ggv_io::remote::read_whole(path).map_err(err)?))
+        } else {
+            Box::new(File::open(path).map_err(err)?)
+        };
+        let name = ggv_io::remote::file_name(path).to_ascii_lowercase();
         let gz = name.ends_with(".gz") || name.ends_with(".bgz");
         let format = Format::from_name(name.trim_end_matches(".gz").trim_end_matches(".bgz"));
         // Decompress on a second thread so it overlaps with parsing.
@@ -175,7 +180,7 @@ impl Annotation {
             if gz { Box::new(Pipe::spawn(flate2::read::MultiGzDecoder::new(file))) } else { Box::new(file) };
         let ann = Self::parse(BufReader::with_capacity(1 << 20, reader), format).map_err(err)?;
         if ann.is_empty() {
-            return Err(Error::Empty { path: path.display().to_string() });
+            return Err(Error::Empty { path: ggv_io::remote::display(path) });
         }
         Ok(ann)
     }
@@ -184,6 +189,9 @@ impl Annotation {
     /// otherwise parses it and writes one (falling back to the parsed copy if that fails).
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        if ggv_io::remote::is_remote(path) {
+            return Self::read(path);
+        }
         let Some(cache) = cache::path_for(path) else { return Self::read(path) };
         if let Some(ann) = cache::open(path, &cache) {
             return Ok(ann);

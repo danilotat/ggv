@@ -84,6 +84,14 @@ pub fn fmt_bp(bp: u64) -> String {
         format!("{} kb", bp / 1000)
     }
 }
+/// What the Open URL window holds.
+#[derive(Default)]
+pub(crate) struct OpenUrl {
+    url: String,
+    index: String,
+    error: Option<String>,
+}
+
 /// Binned depth loads for views up to this wide.
 const COVERAGE_WINDOW: u64 = 5_000_000;
 /// Most zoomed-in: points per base.
@@ -259,6 +267,8 @@ pub struct App {
     queue: Option<crate::queue::Queue>,
     /// The paste-a-list window's text.
     paste_queue: Option<String>,
+    /// The Open URL window.
+    open_url: Option<OpenUrl>,
     palette: Option<palette::Palette>,
     show_shortcuts: bool,
     focus_locus: bool,
@@ -491,6 +501,7 @@ impl App {
             edit_bookmark: None,
             queue: None,
             paste_queue: None,
+            open_url: None,
             palette: args.palette.as_ref().map(|q| palette::Palette { query: q.clone(), ..Default::default() }),
             show_shortcuts: args.shortcuts,
             focus_locus: false,
@@ -602,6 +613,7 @@ impl App {
         s.bookmarks = self.bookmarks.borrow().clone();
         s.overlays = self.overlays.borrow().clone();
         s.track_filters = self.track_filters.iter().map(|(p, e)| (p.clone(), crate::expr::text(*e))).collect();
+        s.indexes = s.bams.iter().filter_map(|p| ggv_io::index_for(p).map(|i| (p.clone(), i))).collect();
         s.variant_colors = self
             .variants
             .iter()
@@ -617,6 +629,9 @@ impl App {
     /// Replaces everything open with `s`. With `whole_window` (a session opened by the person or
     /// an agent) the window's panes are rebuilt to the session's, one pane when it saved one.
     fn apply_session(&mut self, mut s: Session, whole_window: bool, ctx: &egui::Context) {
+        for (data, index) in &s.indexes {
+            ggv_io::set_index_for(data, index);
+        }
         self.note_missing(&mut s);
         if s.recovered {
             self.notify("The session file was damaged; opened its last complete save instead");
@@ -1472,7 +1487,7 @@ impl App {
             let names: Vec<String> = sorted.unknown.iter().map(|p| crate::files::display_name(p)).collect();
             self.error = Some(format!("Not a BAM/CRAM, VCF/BCF, GTF/GFF/BED, FASTA, bigWig/bedGraph/SEG or session: {}", names.join(", ")));
         }
-        let known: Vec<PathBuf> = paths.into_iter().filter(|p| p.exists() && crate::files::kind_of(&p.to_string_lossy()).is_some()).collect();
+        let known: Vec<PathBuf> = paths.into_iter().filter(|p| ggv_io::remote::is_present(p) && crate::files::kind_of(&p.to_string_lossy()).is_some()).collect();
         crate::files::remember(&mut self.recent, &known);
     }
 
@@ -2288,6 +2303,7 @@ impl App {
         self.seq_window(ctx);
         self.compare_window(ctx);
         self.paste_queue_window(ctx);
+        self.open_url_window(ctx);
         self.missing_window(ctx);
         self.update_assembly();
         self.assembly_window(ctx);
@@ -2533,6 +2549,7 @@ impl App {
                     ("Alignments (BAM, CRAM)…", actions::Action::AddBam),
                     ("Variants (VCF, BCF)…", actions::Action::AddVcf),
                     ("Genes (GTF, GFF3, BED)…", actions::Action::AddGenes),
+                    ("URL (https, s3, gs)…", actions::Action::OpenUrl),
                 ] {
                     if ui.button(label).clicked() {
                         ui.close();
@@ -5349,7 +5366,7 @@ fn tracks_text(alignments: usize, variants: usize, genes: usize, signals: usize)
 /// path, and prefixing it again pushed the reason off the status bar.
 pub(crate) fn path_error(path: &std::path::Path, e: impl std::fmt::Display) -> String {
     let e = e.to_string();
-    let shown = path.display().to_string();
+    let shown = ggv_io::remote::display(path);
     if e.contains(&shown) { e } else { format!("{shown}: {e}") }
 }
 

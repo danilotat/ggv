@@ -77,7 +77,7 @@ impl App {
     /// `paths` without the files that aren't there, which are listed in Files not found (as a
     /// session's are) rather than opened: a missing VCF or BAM was offered an index build.
     pub(super) fn existing(&mut self, paths: Vec<PathBuf>, kind: OpenedAs) -> Vec<PathBuf> {
-        let (here, gone): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| p.exists());
+        let (here, gone): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| ggv_io::remote::is_present(p));
         if gone.is_empty() {
             return here;
         }
@@ -142,16 +142,16 @@ impl App {
     /// Opens the files of `s` (files opened on their own) found so far beside what's open; the
     /// others stay listed.
     fn open_found(&mut self, s: Session, ctx: &egui::Context) {
-        let here = |v: &[PathBuf]| v.iter().filter(|p| p.exists()).cloned().collect::<Vec<_>>();
+        let here = |v: &[PathBuf]| v.iter().filter(|p| ggv_io::remote::is_present(p)).cloned().collect::<Vec<_>>();
         let (bams, vcfs, genes, signals) = (here(&s.bams), here(&s.vcfs), here(&s.genes), here(&s.signals));
-        let reference = s.reference.clone().filter(|r| r.exists());
+        let reference = s.reference.clone().filter(|r| ggv_io::remote::is_present(r));
         let mut rest = s;
-        let gone = |p: &PathBuf| !p.exists();
+        let gone = |p: &PathBuf| !ggv_io::remote::is_present(p);
         rest.bams.retain(gone);
         rest.vcfs.retain(gone);
         rest.genes.retain(gone);
         rest.signals.retain(gone);
-        rest.reference = rest.reference.filter(|r| !r.exists());
+        rest.reference = rest.reference.filter(|r| !ggv_io::remote::is_present(r));
         let paths = rest.missing();
         if !paths.is_empty() {
             self.missing = Some(Missing { session: rest, paths, opened: true });

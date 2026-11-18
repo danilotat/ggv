@@ -547,8 +547,8 @@ impl App {
     }
 
     pub fn attach_open(&mut self, files: Vec<PathBuf>, replace: bool, ctx: &egui::Context) -> Result<(), String> {
-        if let Some(missing) = files.iter().find(|p| !p.exists()) {
-            return Err(format!("{}: no such file", missing.display()));
+        if let Some(missing) = files.iter().find(|p| !ggv_io::remote::exists(p)) {
+            return Err(format!("{}: no such file (or the URL can't be reached)", ggv_io::remote::display(missing)));
         }
         if let Some(unknown) = files.iter().find(|p| crate::files::kind_of(&p.to_string_lossy()).is_none()) {
             return Err(format!("{}: not a BAM/CRAM, VCF/BCF, GTF/GFF/BED, FASTA, bigWig/bedGraph/SEG or session", unknown.display()));

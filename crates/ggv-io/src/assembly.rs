@@ -84,7 +84,7 @@ pub fn canonical_contig(name: &str) -> String {
 }
 
 pub fn display_name(p: &Path) -> String {
-    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+    crate::remote::file_name(p)
 }
 
 fn commas(n: u64) -> String {

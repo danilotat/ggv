@@ -20,6 +20,38 @@ next to the file as samtools and tabix would:
 ggv index sample.bam calls.vcf.gz ref.fa     # --force builds one again
 ```
 
+## Files at a URL (S3, GCS, HTTPS)
+
+BAM, CRAM, FASTA, 2bit and bigWig files can be read straight from an `https://`, `http://`,
+`s3://` or `gs://` address, as IGV does: GGV fetches only the byte ranges a query needs, never
+the whole file. The 1000 Genomes CRAMs on S3 work as given, with the reference they were aligned
+to (also on S3, FASTA with its `.fai`):
+
+```sh
+ggv query pileup \
+  https://s3.amazonaws.com/1000genomes/data/NA21144/alignment/NA21144.alt_bwamem_GRCh38DH.20150718.GIH.low_coverage.cram \
+  chr20:1,000,000-1,000,100 \
+  -f https://s3.amazonaws.com/1000genomes/technical/reference/GRCh38_reference_genome/GRCh38_full_analysis_set_plus_decoy_hla.fa
+ggv info s3://1000genomes/data/NA21144/alignment/NA21144.alt_bwamem_GRCh38DH.20150718.GIH.low_coverage.cram
+```
+
+- The index is looked for where it would be next to a local file (`x.bam.bai`, `x.bam.csi`,
+  `x.bai`; `x.cram.crai`, `x.crai`; for a FASTA `x.fa.fai`, plus `x.fa.gz.gzi` when bgzipped).
+  When it lives somewhere else, as with a presigned URL, give it with `--index` (repeat it
+  for several alignment files, in the same order). `ggv index` can't write next to a remote file.
+- `s3://bucket/key` reads the bucket's public HTTPS address. `AWS_REGION` picks the regional
+  endpoint, and `AWS_ENDPOINT_URL` points at an S3-compatible server. `gs://bucket/key` reads
+  `https://storage.googleapis.com/bucket/key`. Presigned URLs work as they are; their query string
+  (the signature) is left out of error messages. Private buckets that need signed requests
+  aren't supported yet.
+- Indexes are fetched whole once and kept in the cache folder (`~/.cache/ggv/remote` on Linux),
+  keyed by URL and ETag, so opening the same file again doesn't fetch them again. Data is cached
+  in memory only, in 256 KB blocks, up to `GGV_REMOTE_CACHE_MB` (default 64) per file. A file
+  that changes on the server while it is open is reported as an error, never read as a mix of
+  the two versions.
+- Gene annotations (GTF, GFF3, BED) and bedGraph/SEG text at a URL are downloaded whole, since
+  they have no index. VCF/BCF can't be read from a URL yet.
+
 ```sh
 ggv render sample.bam chr7:55,191,822 -f ref.fa -o snv.png            # ±50 bp, base outlined
 ggv render sample.bam chr7:55191000-55241000 -f ref.fa -o view.svg    # SVG, real text
