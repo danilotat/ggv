@@ -15,6 +15,7 @@ mod bookmarks;
 mod diff;
 mod files;
 mod finder;
+mod fonts;
 mod genes;
 mod gpu;
 mod links;
@@ -318,6 +319,7 @@ fn main() -> eframe::Result {
         "ggv",
         options,
         Box::new(move |cc| {
+            fonts::install(&cc.egui_ctx);
             let session = match (&cli.session, cli.restore) {
                 _ if linked_session.is_some() => linked_session,
                 (Some(p), _) => Some(session::Session::load(p)?),

@@ -31,6 +31,13 @@ serde.workspace = true
 serde_json.workspace = true
 tiny-skia = "0.12"
 
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+# GNOME (and other compositors without server-side decorations) leave the title bar to the
+# app on Wayland. eframe is built without default features, which drops winit's Adwaita
+# frame and falls back to a bare grey strip with no title; this restores a GNOME-style
+# header bar with the window title centred. Same winit version eframe uses.
+winit = { version = "0.30", default-features = false, features = ["wayland-csd-adwaita"] }
+
 [target.'cfg(windows)'.dependencies]
 # Re-attaching to the launching terminal's console (see main.rs).
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }

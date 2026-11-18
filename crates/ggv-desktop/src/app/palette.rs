@@ -241,8 +241,11 @@ impl App {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut p.query)
                         .desired_width(f32::INFINITY)
-                        .hint_text("Go to a gene, locus, bookmark, or type a command…")
-                        .font(egui::TextStyle::Heading),
+                        // The hint in the same font as the query, or it sits small at the top.
+                        .hint_text(egui::RichText::new("Go to a gene, locus, bookmark, or type a command…").text_style(egui::TextStyle::Heading))
+                        .font(egui::TextStyle::Heading)
+                        .margin(Vec2::new(8.0, 6.0))
+                        .align(Align2::LEFT_CENTER),
                 );
                 if !p.focused {
                     edit.request_focus();
