@@ -12,7 +12,7 @@ pub mod phase;
 mod read;
 
 pub use coverage::{Coverage, CoverageBin, CoverageColumn, coverage_from_reads};
-pub use pack::{Group, GroupBy, PackOptions, Packed, SortBy, pack, pack_indices, pack_with, repack, same_template, pack_sticky, row_hints, RowHints};
+pub use pack::{Group, GroupBy, PackOptions, Packed, SortBy, pack, pack_indices, pack_with, extent, repack, same_template, pack_sticky, row_hints, RowHints};
 pub use ggv_query::ReadPredicate;
 pub use read::{AlignedRead, Block, Indel, Mate, Mismatch, ModCall, SplitAlignment, decode, decode_parts, decode_with, parse_sa, parse_tag_name, read_bases, tag_text};
 
