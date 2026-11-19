@@ -395,3 +395,65 @@ pub fn divider(ui: &mut Ui) {
 pub fn divider_w(ui: &Ui) -> f32 {
     2.0 * GROUP_GAP.max(ui.spacing().item_spacing.x) + 1.0
 }
+
+/// A switch's size: a pill with a knob that slides to the right when on.
+pub const SWITCH: Vec2 = vec2(28.0, 16.0);
+
+/// Paints a switch in `rect` (see [`SWITCH`]): the accent fill while on, a neutral one while off.
+pub fn paint_switch(painter: &Painter, rect: Rect, on: bool, p: &Palette) {
+    let r = rect.height() / 2.0;
+    painter.rect_filled(rect, r, if on { p.accent } else { p.border_strong });
+    let x = if on { rect.right() - r } else { rect.left() + r };
+    painter.circle_filled(pos2(x, rect.center().y), r - 2.0, Color32::WHITE);
+}
+
+/// A menu row with a switch on the right: the whole row toggles it.
+pub fn switch_row(ui: &mut Ui, on: &mut bool, label: &str, hint: Option<&str>) -> Response {
+    let p = palette(ui);
+    let h = CONTROL_H;
+    let (rect, mut r) = ui.allocate_exact_size(vec2(ui.available_width(), h), egui::Sense::click());
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if r.hovered() {
+            painter.rect_filled(rect, RADIUS, p.hover);
+        }
+        let font = egui::FontId::proportional(13.0);
+        painter.text(pos2(rect.left() + 8.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font, p.text);
+        let sw = Rect::from_center_size(pos2(rect.right() - 8.0 - SWITCH.x / 2.0, rect.center().y), SWITCH);
+        paint_switch(painter, sw, *on, p);
+        if let Some(hint) = hint {
+            painter.text(pos2(sw.left() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, hint, egui::FontId::proportional(11.5), p.text_muted);
+        }
+    }
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, *on, label));
+    r
+}
+
+/// A menu row that runs an action: its label on the left, a shortcut hint on the right.
+pub fn action_row(ui: &mut Ui, label: &str, hint: Option<&str>) -> Response {
+    let p = palette(ui);
+    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), CONTROL_H), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if r.hovered() {
+            painter.rect_filled(rect, RADIUS, p.hover);
+        }
+        painter.text(pos2(rect.left() + 8.0, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(13.0), p.text);
+        if let Some(hint) = hint {
+            painter.text(pos2(rect.right() - 8.0, rect.center().y), egui::Align2::RIGHT_CENTER, hint, egui::FontId::proportional(11.5), p.text_muted);
+        }
+    }
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    r
+}
+
+/// A hairline between groups of menu rows.
+pub fn menu_rule(ui: &mut Ui) {
+    let p = palette(ui);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 9.0), egui::Sense::hover());
+    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, p.border));
+}

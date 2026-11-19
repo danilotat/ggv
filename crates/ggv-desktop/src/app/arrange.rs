@@ -150,7 +150,7 @@ impl App {
         })
     }
 
-    fn hit_of(&self, key: &Key) -> Option<Hit> {
+    pub(super) fn hit_of(&self, key: &Key) -> Option<Hit> {
         match key.0 {
             Kind::Variants => self.variants.iter().position(|v| v.path == key.1).map(Hit::Variants),
             Kind::Alignments => self.tracks.iter().position(|t| t.loader.bam_path == key.1).map(Hit::Track),
@@ -557,7 +557,7 @@ impl Layout {
     /// The track whose header (a handle for moving it) `p` is on, its buttons aside.
     pub(super) fn header_at(&self, p: Pos2) -> Option<&(Key, Rect)> {
         self.order.iter().find(|(_, r)| {
-            (r.top()..r.top() + HEADER_H).contains(&p.y) && r.x_range().contains(p.x) && !Layout::close_button(*r).contains(p) && !Layout::collapse_button(*r).contains(p)
+            (r.top()..r.top() + HEADER_H).contains(&p.y) && r.x_range().contains(p.x) && !Layout::close_button(*r).contains(p) && !Layout::collapse_button(*r).contains(p) && !Layout::gear_button(*r).contains(p)
         })
     }
 
@@ -571,9 +571,9 @@ impl Layout {
         Layout::close_button(section).translate(Vec2::new(-22.0, 0.0))
     }
 
-    /// The grip drawn in a header, just left of the collapse button.
+    /// The grip drawn in a header, just left of the settings gear.
     pub(super) fn grip(section: Rect) -> Rect {
-        Rect::from_min_size(Pos2::new(Layout::collapse_button(section).left() - 16.0, section.top() + 2.0), Vec2::new(12.0, HEADER_H - 4.0))
+        Rect::from_min_size(Pos2::new(Layout::gear_button(section).left() - 16.0, section.top() + 2.0), Vec2::new(12.0, HEADER_H - 4.0))
     }
 }
 

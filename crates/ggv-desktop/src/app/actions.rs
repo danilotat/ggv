@@ -2,11 +2,11 @@
 //! shortcuts overlay and the key handling, so they can't disagree.
 
 use eframe::egui::{self, Align2, Key, Modifiers, Vec2};
-use ggv_layout::GroupBy;
+use ggv_layout::{GroupBy, SortBy};
 
 use super::App;
 use crate::{
-    session::{color_name, group_name},
+    session::{color_name, group_name, sort_name},
     tracks::{ColorBy, CoverageScale},
 };
 
@@ -58,8 +58,19 @@ pub enum Action {
     ToggleSharedScale,
     ToggleAutoReload,
     ReloadAll,
+    ToggleLinkSplits,
+    ToggleViewPairs,
+    ToggleJunctions,
     Color(ColorBy),
     Group(GroupBy),
+    /// Group by the base at the outlined base (or the view's centre).
+    GroupBaseHere,
+    /// Sort rows by the reads at the outlined base (or the view's centre).
+    Sort(SortBy),
+    ClearSort,
+    ReadDetails,
+    CopyPosition,
+    TrackSettings,
     Scale(CoverageScale),
     Split,
     ClosePane,
@@ -87,10 +98,14 @@ impl Action {
             OpenSession, RestoreSession, ExportPng, CopyImage, CopyLink, CopyCommand, CopyFasta, CopySam, Report, AddBookmark,
             Bookmarks, ExportBookmarks, QueueOpen, QueuePaste, QueueStop, ReviewVariants, NextVariant, PrevVariant, Filter,
             ClearFilter, FindRead, SeqSearch, Compare, NextDiff, PrevDiff, ToggleEvidence, ToggleSquish, ToggleSoftClips,
-            ToggleDark, ToggleAllTranscripts, ToggleSharedScale, ToggleAutoReload, ReloadAll,
+            ToggleDark, ToggleAllTranscripts, ToggleSharedScale, ToggleAutoReload, ReloadAll, ToggleLinkSplits, ToggleViewPairs,
+            ToggleJunctions, ReadDetails, CopyPosition, TrackSettings,
         ];
+        v.extend([SortBy::Base, SortBy::Strand, SortBy::MappingQuality, SortBy::Start, SortBy::InsertSize].map(Sort));
+        v.push(ClearSort);
         v.extend([ColorBy::None, ColorBy::Strand, ColorBy::Haplotype, ColorBy::InsertSize, ColorBy::BaseMods].map(Color));
         v.extend([GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles].map(Group));
+        v.push(GroupBaseHere);
         v.extend([CoverageScale::View, CoverageScale::Loaded, CoverageScale::Log].map(Scale));
         v.extend([Split, ClosePane, LinkPanes, ClearSelection, OpenDemo, About, Assembly]);
         v
@@ -153,8 +168,18 @@ impl Action {
             ToggleSharedScale => "Toggle one coverage scale for all tracks".into(),
             ToggleAutoReload => "Toggle reloading files when they change".into(),
             ReloadAll => "Reload all files".into(),
-            Color(c) => format!("Colour reads by {}", color_name(c)),
+            ToggleLinkSplits => "Toggle linking split reads".into(),
+            ToggleViewPairs => "Toggle viewing reads as pairs".into(),
+            ToggleJunctions => "Toggle splice junctions".into(),
+            Color(c) => format!("Color reads by {}", color_name(c)),
             Group(g) => format!("Group reads by {}", group_name(g)),
+            GroupBaseHere => "Group reads by base at the outlined base".into(),
+            Sort(SortBy::Base) => "Sort reads by base at the outlined base".into(),
+            Sort(by) => format!("Sort reads by {} at the outlined base", sort_name(by)),
+            ClearSort => "Sort reads: none (clear sort)".into(),
+            ReadDetails => "Read details (selected read)".into(),
+            CopyPosition => "Copy position (outlined base or view centre)".into(),
+            TrackSettings => "Track settings…".into(),
             Scale(CoverageScale::View) => "Coverage: autoscale to view".into(),
             Scale(CoverageScale::Loaded) => "Coverage: scale to loaded data".into(),
             Scale(CoverageScale::Log) => "Coverage: log scale".into(),
@@ -232,7 +257,8 @@ const OTHER_KEYS: &[(&str, &str)] = &[
     ("Shift+drag", "Select a region: statistics"),
     ("Ctrl+drag", "Measure: length, GC, depth, reads (from what's loaded)"),
     ("Double-click", "Zoom in, or fit a gene"),
-    ("Right-click", "Sort, group, colour, copy, go to mate"),
+    ("Right-click", "Sort, group, color, display switches, copy, bookmark, track settings"),
+    ("Arrows, Enter, Esc", "In the right-click menu: move, open a submenu (Right) or close it (Left), choose, dismiss"),
     ("N / P", "Next / previous item (variant review or review queue)"),
     ("1 / 2 / 3", "Mark real/pass, artifact/fail, unsure, and move on"),
     ("U", "Next undecided item (review queue)"),
@@ -258,7 +284,9 @@ impl App {
             || self.seq.is_some()
             || self.filter_ui.is_some()
             || self.show_about
-            || self.assembly.show;
+            || self.assembly.show
+            || self.track_settings.is_some()
+            || self.read_details.is_some();
         if windows && ctx.input_mut(|i| i.consume_key(NONE, Key::Escape)) {
             self.variant_popup = None;
             self.show_bookmarks = false;
@@ -271,6 +299,8 @@ impl App {
             self.filter_ui = None;
             self.show_about = false;
             self.assembly.show = false;
+            self.track_settings = None;
+            self.read_details = None;
             return;
         }
         // egui matches modifiers loosely (Ctrl+F also fires on Ctrl+Shift+F), so try the
@@ -384,8 +414,27 @@ impl App {
                 self.notify(if self.auto_reload { "Files reload when they change" } else { "Files no longer reload when they change" });
             }
             ReloadAll => self.reload_all(ctx),
+            ToggleLinkSplits => style.link_splits = !style.link_splits,
+            ToggleViewPairs => style.view_pairs = !style.view_pairs,
+            ToggleJunctions => style.junctions = !style.junctions,
             Color(c) => style.color = c,
             Group(g) => style.group = g,
+            GroupBaseHere => style.group = GroupBy::BaseAt(self.base_here()),
+            Sort(by) => style.sort = Some((self.base_here(), by)),
+            ClearSort => style.sort = None,
+            ReadDetails => self.open_selected_read_details(),
+            CopyPosition => {
+                if let Some(name) = self.contigs.get(self.contig).map(|c| c.name.clone()) {
+                    let p = self.base_here();
+                    ctx.copy_text(format!("{name}:{}", p + 1));
+                    self.notify(format!("Copied {name}:{}", crate::util::commas(p + 1)));
+                }
+            }
+            TrackSettings => {
+                if let Some(hit) = self.settings_target() {
+                    self.open_track_settings(hit);
+                }
+            }
             Scale(s) => style.coverage_scale = s,
             Split | ClosePane | LinkPanes => self.shell_request = Some(a),
             About => self.show_about = true,

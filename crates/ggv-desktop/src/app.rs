@@ -4,6 +4,7 @@ mod assembly;
 pub(crate) mod arrange;
 mod attach;
 mod coding;
+mod context_menu;
 mod control;
 mod demo;
 mod dialogs;
@@ -11,6 +12,7 @@ mod genome;
 mod inspector;
 mod palette;
 mod tools;
+mod track_settings;
 mod variant_info;
 mod workspace;
 
@@ -214,7 +216,7 @@ pub struct App {
     own_reference: Option<(PathBuf, ggv_io::ReferenceFasta)>,
     locus_text: String,
     pending_goto: Option<String>,
-    /// The tag typed in the colour/group menus.
+    /// The tag typed in the color/group menus.
     tag_input: String,
     /// The order and heights of the tracks, as the person arranged them.
     arrangement: arrange::Arrangement,
@@ -240,8 +242,14 @@ pub struct App {
     highlight: Option<(usize, u64)>,
     /// The track whose rows a vertical drag scrolls.
     drag_track: Option<Hit>,
-    /// Where the context menu was opened: contig index, base, and the read under it.
-    menu_at: Option<(usize, u64, Option<AlignedRead>, Option<Hit>)>,
+    /// The right-click menu, while open.
+    ctx_menu: Option<context_menu::ContextMenu>,
+    /// The track last right-clicked, for the palette's "Track settings…".
+    menu_track: Option<arrange::Key>,
+    /// The track whose settings panel is open.
+    track_settings: Option<arrange::Key>,
+    /// The read whose details window is open.
+    read_details: Option<track_settings::ReadDetails>,
     /// The clicked read's name: every alignment with it is outlined (mate, split parts).
     selected_read: Option<String>,
     /// The variant whose details are open (clicked).
@@ -495,7 +503,10 @@ impl App {
             automation: args.automation,
             highlight: None,
             drag_track: None,
-            menu_at: None,
+            ctx_menu: None,
+            menu_track: None,
+            track_settings: None,
+            read_details: None,
             selected_read: args.select_read.clone(),
             variant_popup: None,
             selection: None,
@@ -672,7 +683,7 @@ impl App {
         self.measuring = false;
         self.selected_read = None;
         self.variant_popup = None;
-        self.menu_at = None;
+        self.ctx_menu = None;
         self.drag_track = None;
         self.back.clear();
         self.forward.clear();
@@ -1569,7 +1580,7 @@ impl App {
         if self.measure.is_none() {
             self.measuring = false;
         }
-        self.menu_at = None;
+        self.ctx_menu = None;
         self.requested_view = None;
         *self.consequence_cache.borrow_mut() = None;
     }
@@ -2269,7 +2280,7 @@ impl App {
         if self.track_keys() != before {
             // Track indices name other tracks now.
             self.drag_track = None;
-            self.menu_at = None;
+            self.ctx_menu = None;
             self.hover_variant = None;
             self.sync_compare();
         }
@@ -2291,6 +2302,8 @@ impl App {
     pub fn windows(&mut self, ctx: &egui::Context) {
         self.poll_jobs(ctx);
         self.watch_files(ctx);
+        // The right-click menu takes its keys (arrows, Enter, Escape) before the shortcuts.
+        self.context_menu_input(ctx);
         if self.is_active {
             let typing = ctx.memory(|m| m.focused().is_some());
             self.action_keys(ctx, typing);
@@ -2334,6 +2347,9 @@ impl App {
         self.poll_dialog(ctx);
         self.error_log.note(self.error.as_ref());
         self.about_window(ctx);
+        self.track_settings_window(ctx);
+        self.read_details_window(ctx);
+        self.context_menu_ui(ctx);
         if std::mem::take(&mut self.pending_demo) {
             self.open_demo(ctx);
         }
@@ -2659,7 +2675,7 @@ impl App {
             theme::group(ui, |ui| {
             let tag_input = &mut tag_buf;
             let (reads_r, _) = egui::containers::menu::MenuButton::from_button(reads_button).config(keep_open()).ui(ui, |ui| {
-                ui.menu_button(format!("Colour: {}", crate::session::color_text(style.color).replace("tag:", "tag ")), |ui| color_options(ui, &mut style.color, tag_input));
+                ui.menu_button(format!("Color: {}", crate::session::color_text(style.color).replace("tag:", "tag ")), |ui| color_options(ui, &mut style.color, tag_input));
                 ui.menu_button(format!("Group: {}", group_label(style.group)), |ui| group_options(ui, &mut style.group, here, tag_input));
                 let sort_label = style.sort.map_or_else(|| "Sort".to_owned(), |(p, by)| format!("Sort: {} @ {}", sort_name(by), commas(p + 1)));
                 ui.menu_button(sort_label, |ui| {
@@ -2907,7 +2923,7 @@ impl App {
         let st = self.style;
         let mut v: Vec<(String, fn(&mut Self))> = Vec::new();
         if st.color != d.color {
-            v.push((format!("colour: {}", crate::session::color_text(st.color).replace("tag:", "tag ")), |a| a.style.color = Style::default().color));
+            v.push((format!("color: {}", crate::session::color_text(st.color).replace("tag:", "tag ")), |a| a.style.color = Style::default().color));
         }
         if st.group != d.group {
             v.push((format!("group: {}", group_label(st.group)), |a| a.style.group = Style::default().group));
@@ -3162,9 +3178,13 @@ impl App {
                 Some(Hit::Track(i)) => self.read_at(i, layout.sections[i], p, vs).cloned(),
                 _ => None,
             };
-            self.menu_at = Some((self.contig, base, read, layout.hit(p.y)));
+            let hit = layout.hit(p.y);
+            if let Some(h) = hit {
+                self.menu_track = self.key_of(h);
+            }
+            self.ctx_menu = Some(context_menu::ContextMenu::new(self.contig, base, read, hit, p));
+            ui.ctx().request_repaint();
         }
-        response.context_menu(|ui| self.context_menu(ui));
 
         // A track header shows its full name (the title may be shortened).
         let header = response.hover_pos().and_then(|pos| {
@@ -3175,6 +3195,9 @@ impl App {
                 Hit::Variants(i) => layout.variants[i],
                 Hit::Signal(i) => layout.signals[i],
             };
+            if Layout::gear_button(section).contains(pos) {
+                return Some("Track settings".to_owned());
+            }
             if Layout::collapse_button(section).contains(pos) {
                 let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
                 return Some(if collapsed { "Expand track" } else { "Collapse track to its header (or double-click the header)" }.to_owned());
@@ -3232,9 +3255,11 @@ impl App {
         rect
     }
 
-    /// A track header's buttons: collapse ("−", or "+" to open a collapsed track) and close.
+    /// A track header's buttons: settings (a gear), collapse ("−", or "+" to open a collapsed
+    /// track) and close.
     fn header_buttons(&self, painter: &egui::Painter, section: Rect, hit: Hit) {
         let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
+        track_settings::paint_gear(painter, Layout::gear_button(section), self.pal().icon);
         let fold = Layout::collapse_button(section);
         painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(19.0), self.pal().icon);
         let close = Layout::close_button(section);
@@ -3411,152 +3436,6 @@ impl App {
         (ext(r).0 <= base).then_some(r)
     }
 
-    /// Right-click menu (IGV-style): sort at the clicked base, group, colour, copy.
-    fn context_menu(&mut self, ui: &mut egui::Ui) {
-        let Some((contig, base, read, hit)) = self.menu_at.clone() else {
-            ui.close();
-            return;
-        };
-        let name = self.contigs.get(contig).map_or("", |c| c.name.as_str()).to_owned();
-        ui.label(egui::RichText::new(format!("{name}:{}", commas(base + 1))).strong());
-        ui.separator();
-        if let Some(Hit::Variants(i)) = hit
-            && let Some(v) = self.variants.get_mut(i)
-        {
-            ui.menu_button(format!("Colour sites: {}", v.color.name()), |ui| {
-                let mut pick = None;
-                if ui.selectable_label(v.color == variants::SiteColor::AlleleFrequency, "Allele frequency (AF)").clicked() {
-                    pick = Some(variants::SiteColor::AlleleFrequency);
-                }
-                ui.separator();
-                ui.label(egui::RichText::new("INFO field").weak());
-                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                    for f in v.info_fields.iter() {
-                        let on = v.color == variants::SiteColor::Info(f.id.clone());
-                        if ui.selectable_label(on, &f.id).on_hover_text(&f.description).clicked() {
-                            pick = Some(variants::SiteColor::Info(f.id.clone()));
-                        }
-                    }
-                });
-                if let Some(c) = pick {
-                    v.color = c;
-                    ui.close();
-                }
-            });
-            ui.separator();
-        }
-        let mut style = self.style;
-        sort_options(ui, &mut style.sort, base);
-        ui.separator();
-        if ui.button("Group by base here").clicked() {
-            style.group = ggv_layout::GroupBy::BaseAt(base);
-            ui.close();
-        }
-        let tag_input = &mut self.tag_input;
-        ui.menu_button(format!("Group: {}", group_label(style.group)), |ui| group_options(ui, &mut style.group, base, tag_input));
-        let tag_input = &mut self.tag_input;
-        ui.menu_button(format!("Colour: {}", crate::session::color_text(style.color).replace("tag:", "tag ")), |ui| color_options(ui, &mut style.color, tag_input));
-        ui.checkbox(&mut style.soft_clips, "Show soft-clipped bases");
-        ui.checkbox(&mut style.link_splits, "Link split reads");
-        ui.checkbox(&mut style.view_pairs, "View as pairs");
-        ui.checkbox(&mut style.squished, "Squish");
-        ui.checkbox(&mut style.junctions, "Splice junctions");
-        self.style = style;
-        ui.separator();
-        if let Some(read) = &read {
-            if ui.button("Copy read name").clicked() {
-                ui.ctx().copy_text(read.name.clone());
-                ui.close();
-            }
-            if let Some(Hit::Track(i)) = hit {
-                if ui.button("Copy read sequence").clicked() {
-                    self.copy_read(&ui.ctx().clone(), i, read, true);
-                    ui.close();
-                }
-                if ui.button("Copy read as SAM").clicked() {
-                    self.copy_read(&ui.ctx().clone(), i, read, false);
-                    ui.close();
-                }
-            }
-            // Mate and other alignments of this read, through history (Alt+Left comes back).
-            let track = match hit {
-                Some(Hit::Track(i)) => self.tracks.get(i),
-                _ => None,
-            };
-            if let Some(m) = read.mate
-                && let Some(mate_contig) = track.and_then(|t| t.contigs().get(m.contig_id.max(0) as usize)).map(|c| c.name.clone())
-                && ui.button(format!("Go to mate  {mate_contig}:{}", commas(m.pos.max(0) as u64 + 1))).clicked()
-            {
-                self.selected_read = Some(read.name.clone());
-                self.jump_to(&mate_contig, m.pos.max(0) as u64);
-                ui.close();
-            }
-            for sa in &read.supplementary {
-                let label = format!("Go to split part  {}:{} ({}, MAPQ {})", sa.contig, commas(sa.pos + 1), if sa.reverse { "−" } else { "+" }, sa.mapq);
-                if ui.button(label).clicked() {
-                    self.selected_read = Some(read.name.clone());
-                    self.jump_to(&sa.contig, sa.pos);
-                    ui.close();
-                }
-            }
-        }
-        if ui.button("Copy position").clicked() {
-            ui.ctx().copy_text(format!("{name}:{}", base + 1));
-            ui.close();
-        }
-        let ctx = ui.ctx().clone();
-        if ui.button(if self.selection.is_some() { "Copy selection as FASTA" } else { "Copy view as FASTA" }).clicked() {
-            self.copy_fasta(&ctx);
-            ui.close();
-        }
-        if self.selection.is_some() && ui.button("Copy selected reads as SAM").clicked() {
-            self.copy_selection_sam(&ctx);
-            ui.close();
-        }
-        if ui.button("Copy view image").clicked() {
-            self.run(actions::Action::CopyImage, &ctx);
-            ui.close();
-        }
-        if ui.button("Bookmark here").clicked() {
-            let i = crate::bookmarks::add(
-                &mut self.bookmarks.borrow_mut(),
-                crate::bookmarks::Bookmark { contig: name.clone(), start: base, end: base + 1, note: String::new() },
-            );
-            self.show_bookmarks = true;
-            self.edit_bookmark = Some(i);
-            ui.close();
-        }
-        if let Some(hit) = hit {
-            ui.separator();
-            if let Hit::Track(i) = hit
-                && ui.button("Filter this track…").clicked()
-            {
-                self.open_filter_window(Some(i));
-                ui.close();
-            }
-            if let Some(key) = self.key_of(hit) {
-                let collapsed = self.arrangement.collapsed.contains(&key);
-                if ui.button(if collapsed { "Expand track" } else { "Collapse track" }).clicked() {
-                    self.arrangement.toggle_collapsed(&key);
-                    ui.close();
-                }
-            }
-            if ui.button("Move track up").clicked() {
-                self.move_track(hit, true);
-                ui.close();
-            }
-            if ui.button("Move track down").clicked() {
-                self.move_track(hit, false);
-                ui.close();
-            }
-            if ui.button("Close track").clicked() {
-                self.close_hit(hit);
-                self.menu_at = None;
-                ui.close();
-            }
-        }
-    }
-
     /// Points per coverage height unit for each alignment track: scaled to the deepest visible
     /// position (or loaded, or log), per track or shared across tracks.
     fn coverage_scales(&self, vs: f64, ve: f64) -> Vec<f32> {
@@ -3602,6 +3481,10 @@ impl App {
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
+            if let Some(key) = track_settings::gear_at(layout, p) {
+                self.track_settings = Some(key);
+                return;
+            }
             if let Some((key, _)) = layout.collapse_at(p) {
                 self.arrangement.toggle_collapsed(&key.clone());
                 return;
@@ -4329,6 +4212,15 @@ impl App {
             egui::StrokeKind::Outside,
         );
 
+        show_tooltip(response, self.read_lines(i, r, base));
+    }
+
+    /// A read's summary, as its hover and its details window show it: name and track, place,
+    /// MAPQ and flags, differences, what it has at `base`, and its mate, tags and mods.
+    pub(super) fn read_lines(&self, i: usize, r: &AlignedRead, base: u64) -> Vec<String> {
+        let t = &self.tracks[i];
+        let has_ref = t.current.as_ref().is_some_and(|c| c.view.reference.is_some());
+        let contig = t.current.as_ref().map_or("", |c| c.view.region.contig.as_str());
         let at_base = if let Some(m) = r.mismatches.iter().find(|m| m.pos == base) {
             format!("{} (Q{}) vs ref", m.base as char, m.quality)
         } else if r.deletions.iter().any(|d| (d.pos..d.pos + u64::from(d.len)).contains(&base)) {
@@ -4337,29 +4229,26 @@ impl App {
             "skipped (N)".to_owned()
         } else if let Some((_, l)) = tracks::mod_likelihoods(r).find(|(p, _)| *p == base) {
             format!("modified {:.0}%", f64::from(l) / 2.55)
-        } else if view.reference.is_some() {
+        } else if has_ref {
             "matches ref".to_owned()
         } else {
             "aligned".to_owned()
         };
-        show_tooltip(
-            response,
-            vec![
-                format!("{}  [{}]", r.name, t.short_label()),
-                format!("{contig}:{}-{}  {}", commas(r.start + 1), commas(r.end), if r.reverse { "(−)" } else { "(+)" }),
-                format!("MAPQ {}  flags 0x{:x}", r.mapq, r.flags),
-                format!(
-                    "{} mismatches · {} del · {} ins · clips {}/{}",
-                    r.mismatches.len(),
-                    r.deletions.len(),
-                    r.insertions.len(),
-                    r.soft_clip_left,
-                    r.soft_clip_right
-                ),
-                format!("at {}: {at_base}", commas(base + 1)),
-                read_extras(r),
-            ],
-        );
+        vec![
+            format!("{}  [{}]", r.name, t.short_label()),
+            format!("{contig}:{}-{}  {}", commas(r.start + 1), commas(r.end), if r.reverse { "(−)" } else { "(+)" }),
+            format!("MAPQ {}  flags 0x{:x}", r.mapq, r.flags),
+            format!(
+                "{} mismatches · {} del · {} ins · clips {}/{}",
+                r.mismatches.len(),
+                r.deletions.len(),
+                r.insertions.len(),
+                r.soft_clip_left,
+                r.soft_clip_right
+            ),
+            format!("at {}: {at_base}", commas(base + 1)),
+            read_extras(r),
+        ]
     }
 }
 

@@ -23,26 +23,40 @@ and close one with the × in its header (or collapse it to the header with −).
 each track maps the view's contig through the same aliases as the CLI, and says so in its
 header when a file lacks the contig.
 
-**Reading alignments** (toolbar, or right-click a base for IGV's context menu):
+**Reading alignments** (toolbar, or right-click a base):
+
+- **The right-click menu** shows the clicked position (and the read under the pointer, with a
+  copy button on hover), then **Sort by base at** the position (one click), the **Sort reads**,
+  **Group reads** and **Color by** submenus (each row shows the current choice; the active one is
+  checked inside), **Read details** when a read was hit, the **Show soft-clipped bases**,
+  **Link split reads** and **View as pairs** switches (toggling keeps the menu open), and
+  **Copy position**, **Bookmark position** and **Track settings…**. Arrow keys move, Right opens a
+  submenu and Left closes it, Enter chooses, Esc or a click outside dismisses. It flips to stay
+  inside the window. Everything in it is also in the command palette (Ctrl+K), acting at the
+  outlined base (or the view centre).
+- **Track settings** (the gear in each track header, or **Track settings…** in the menu):
+  **Squish** and **Splice junctions**, **Filter reads in this track…**, **Copy view as FASTA**
+  (or the selection), **Copy selected reads as SAM**, **Copy view image**, and **Move track up /
+  down**, **Collapse / Expand track** and **Close track**.
 
 - **Sort** the rows at a base by base (mismatches A/C/G/T/N first, then deletions, then
   reference), strand, MAPQ, start, or insert size. As in IGV, rows are reordered by the read
   over that base, so reads stay packed. `--sort base` sorts at the locus on startup.
 - **Group** by strand, haplotype (`HP` tag, for phased long reads), read group (`RG`) or **any
-  tag** (type it in the Group or Colour menu: `CB` cell barcodes, `PS` phase sets, `UB`, `MI`, an
-  aligner's own), each group in its own labelled band. **Colour by tag** gives each value its
+  tag** (type it in the Group or Color menu: `CB` cell barcodes, `PS` phase sets, `UB`, `MI`, an
+  aligner's own), each group in its own labelled band. **Color by tag** gives each value its
   own colour, the same in the app and in `ggv render` (`--group tag --tag CB`, `--color-by tag`;
   MCP `group_by` / `color_by` `tag:CB`). Reads are reloaded with the tag when it changes.
 - **Link split reads** (checkbox, `--link`, MCP `link`): each split read's primary and
   supplementary records go on one row, joined by a thin blue line, in the primary's group (as
   IGV's "link supplementary alignments"); mates of a pair are joined only by **View as pairs**.
-- **View as pairs** (checkbox in Reads and the right-click menu, `--pairs`, MCP `pairs`): the two
+- **View as pairs** (checkbox in Reads, switch in the right-click menu, `--pairs`, MCP `pairs`): the two
   mates of each pair (their primary records) go on one row, joined by a grey line across the
   insert, as IGV's "view as pairs". A pair goes in its leftmost mate's group and sorts by the mate
   over the sort base. A mate whose partner isn't loaded (further than the read window, or on
   another contig) is drawn alone; secondary and supplementary records stay apart unless **Link
   split reads** is on too, which puts a split mate's parts on its pair's row.
-- **Colour** by strand, haplotype, or insert size and pair orientation: inserts above the
+- **Color** by strand, haplotype, or insert size and pair orientation: inserts above the
   99.5th / below the 0.5th percentile of the loaded pairs red / blue, mate on another contig
   orange, outward (RL, for mates that don't overlap) green, same-strand LL teal / RR dark blue.
 - **Base modifications** (`MM`/`ML` tags, e.g. 5mC/5hmC/6mA from ONT or PacBio): IGV's
@@ -53,11 +67,12 @@ header when a file lacks the contig.
   106,437 (position, code) entries over 100 kb (counts and summed likelihoods; calls on
   inserted bases, which samtools also prints, aren't drawn).
 - **Soft clips**: show clipped bases where they would align, paler, with their mismatches.
-- Copy a read name or position from the context menu. Read tooltips add HP, RG, insert size
-  and mate position.
+- Copy a read name or position from the right-click menu. Read tooltips (and **Read details**)
+  add HP, RG, insert size and mate position.
 - Startup flags: `--color` (`strand`, `haplotype`, `insert-size`, `base-mods`), `--group`,
   `--sort`, `--soft-clips`.
-- Right-click a track for **Collapse / Expand track**, **Move track up / down** and **Close track**.
+- A track's gear (or right-click → **Track settings…**) has **Collapse / Expand track**, **Move
+  track up / down** and **Close track**.
 
 **Sessions** (**Session** menu): **Save as…** writes the open files, view, outlined base,
 display options and every split pane (with whether they are linked) to a small JSON file;
@@ -171,7 +186,7 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
 - **Coverage** scale: autoscale to the view, to the loaded data, or log; optionally the same
   scale for every track.
 - **Session → Export view as PNG…** saves the tracks exactly as drawn. **Dark** switches theme.
-- **Group by base here** (right-click a base, or `--group base`): reads in bands by the base they
+- **Group by base** (right-click a base → **Group reads** → **Base at …**, or `--group base`): reads in bands by the base they
   carry there (A/C/G/T, deletion, not covering), for eyeballing which reads support an allele.
 - **No reference open**: the reference row says so (mismatches aren't drawn without one) and
   names the built-in genome that matches the alignments, under **Open > Reference…**. The
@@ -201,8 +216,8 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
   hg38 genes, a VCF called on another reference) the label becomes **Assembly mismatch**, and
   **View → Assembly and reference…** explains each file's build and every disagreement before
   mismatch colours or consequence labels are trusted. Custom assemblies are simply "unknown".
-- **Mates and split reads**: right-click a read for **Go to mate** and **Go to split part**
-  (from `SA`), which jump there (across chromosomes) and outline it; tooltips list both.
+- **Mates and split reads**: right-click a read → **Read details** for **Go to mate** and **Go to
+  split part** (from `SA`), which jump there (across chromosomes) and outline it; tooltips list both.
 - **Region statistics**: Shift-drag across the tracks to select a region; a window gives each
   track's read counts by filter, mean/median/min/max depth, breadth at 1/10/20/30×, and the
   variable sites, matching `ggv query summary`, with **Copy as JSON**.
@@ -277,7 +292,7 @@ every shortcut:
   `flag & 0x800`, `name ~ "ccs"`, `insert > 1000 || mate_elsewhere`, `tag(HP) == 2`. Fields cover
   MAPQ, flags, positions, strand, pairing, HP/RG, name, mismatch/indel/clip counts, base mods
   and split reads; the window lists them and checks the expression as you type. Apply to every
-  track, or right-click a track → **Filter this track…** for one file (remembered for that file
+  track, or a track's gear → **Filter reads in this track…** for one file (remembered for that file
   the next time it opens). Save filters for reuse; they appear in the palette. Expressions apply
   where reads are loaded (views within the read window) and run on the loader thread with no allocation.
 - **Find a read by name** (Ctrl+Shift+F, or `--find-read`): loaded reads first (instant), then
@@ -296,9 +311,9 @@ every shortcut:
 - **Measure** (Ctrl+drag): length, GC content, and each track's mean depth and read count over
   the span, live while dragging, from loaded data. It stays until Esc, and shows only while some
   of the span is in view.
-- **Copy as**: right-click to copy a read's sequence or SAM line, the selection (or view) as
-  FASTA, the selected reads as SAM, or the view as an image (Ctrl+Shift+C) straight to the
-  clipboard. Copies that need the disk run on a background thread.
+- **Copy as**: a read's sequence or SAM line (right-click → **Read details**), the selection (or
+  view) as FASTA, the selected reads as SAM, or the view as an image (Ctrl+Shift+C) from a
+  track's settings, straight to the clipboard. Copies that need the disk run on a background thread.
 - **Evidence report** (Ctrl+Shift+R, or `--report out.html`): one self-contained HTML file for
   the outlined base: the view as an embedded PNG, the VCF records with genotypes, each track's
   allele counts by strand with MAPQ and base-quality summaries (and a warning for one-strand
