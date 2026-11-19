@@ -2519,20 +2519,35 @@ impl App {
         // The locus box is always wide enough for the whole locus and takes the room left over;
         // when the row is short the chips fold into one menu, then Split, Evidence and Commands
         // into More. A pane too narrow even for that wraps.
+        // Groups, left to right: navigation (back, forward), coordinates (the locus box, Go,
+        // zoom), files (Open), analysis (Reads, Variants, Evidence), view (View and the chips),
+        // then the window's tools (Split, Commands). Every control is one height (theme.rs).
+        use crate::theme::{self, Icon};
+        theme::toolbar_spacing(ui);
         let chips = self.chips();
         let fit = self.toolbar_fit(ui, &chips.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>());
+        let palette_key = actions::keys_label(actions::Action::Palette.keys().expect("has keys"));
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(!self.back.is_empty(), egui::Button::new("<")).on_hover_text("Back (Alt+Left)").clicked() {
-                self.go_back();
-            }
-            if ui.add_enabled(!self.forward.is_empty(), egui::Button::new(">")).on_hover_text("Forward (Alt+Right)").clicked() {
-                self.go_forward();
-            }
+            // Navigation.
+            theme::group(ui, |ui| {
+                if theme::icon_button(ui, Icon::Back, !self.back.is_empty(), "Back", "Back (Alt+Left)").clicked() {
+                    self.go_back();
+                }
+                if theme::icon_button(ui, Icon::Forward, !self.forward.is_empty(), "Forward", "Forward (Alt+Right)").clicked() {
+                    self.go_forward();
+                }
+            });
+            ui.add_space(theme::GROUP_GAP - ui.spacing().item_spacing.x);
+
+            // Genomic coordinates: the locus box leads, a search field with its icon inside.
             let locus_w = fit.locus_w;
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.locus_text).id_salt("locus")
                     .desired_width(locus_w)
                     .hint_text("chr20:1,895,892 or BRCA1")
+                    .prefix(theme::icon(Icon::Search))
+                    .margin(egui::Margin::symmetric(8, 4))
+                    .align(egui::Align2::LEFT_CENTER)
                     .font(egui::TextStyle::Monospace),
             );
             let edit = if fit.go { edit } else { edit.on_hover_text("Enter to go there") };
@@ -2547,7 +2562,7 @@ impl App {
                 }
             }
             let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (fit.go && ui.button("Go").clicked()) || submitted {
+            if (fit.go && theme::primary(ui, "Go").on_hover_text("Go to the locus or gene (Enter)").clicked()) || submitted {
                 self.pending_goto = Some(self.locus_text.clone());
             }
             if !edit.has_focus()
@@ -2557,15 +2572,20 @@ impl App {
                 self.locus_text = text;
             }
 
-            if ui.button("−").on_hover_text("Zoom out (−)").clicked() {
-                self.zoom_at(0.5, self.width / 2.0);
-            }
-            if ui.button("+").on_hover_text("Zoom in (+)").clicked() {
-                self.zoom_at(2.0, self.width / 2.0);
-            }
-            ui.separator();
+            ui.add_space(theme::GROUP_GAP - ui.spacing().item_spacing.x);
+            theme::group(ui, |ui| {
+                if theme::icon_button(ui, Icon::ZoomOut, true, "Zoom out", "Zoom out (−)").clicked() {
+                    self.zoom_at(0.5, self.width / 2.0);
+                }
+                if theme::icon_button(ui, Icon::ZoomIn, true, "Zoom in", "Zoom in (+)").clicked() {
+                    self.zoom_at(2.0, self.width / 2.0);
+                }
+            });
+            theme::divider(ui);
 
-            ui.menu_button("Open", |ui| {
+            // Files.
+            let open_button = theme::menu_button(ui, Icon::Folder, "Open", fit.compact);
+            let (open_r, _) = theme::group(ui, |ui| egui::containers::menu::MenuButton::from_button(open_button).ui(ui, |ui| {
                 for (label, action) in [
                     ("Alignments (BAM, CRAM)…", actions::Action::AddBam),
                     ("Variants (VCF, BCF)…", actions::Action::AddVcf),
@@ -2620,8 +2640,11 @@ impl App {
                     self.run(actions::Action::OpenDemo, ctx);
                     ui.close();
                 }
-            });
+            }));
+            theme::name_menu(&open_r, fit.compact, "Open");
+            theme::divider(ui);
 
+            // Analysis: how reads show, the variants, the evidence at a base.
             let mut style = self.style;
             let here = match self.highlight {
                 Some((c, p)) if c == self.contig => p,
@@ -2629,8 +2652,13 @@ impl App {
             };
             // The tag being typed, lent to the colour and group menus while Reads is open.
             let mut tag_buf = std::mem::take(&mut self.tag_input);
+            let reads_button = theme::menu_button(ui, Icon::Reads, "Reads", fit.compact);
+            let variants_label = if self.review.is_some() { "Variants (reviewing)" } else { "Variants" };
+            let variants_button = (!self.variants.is_empty())
+                .then(|| theme::menu_button(ui, Icon::Variants, variants_label, fit.compact));
+            theme::group(ui, |ui| {
             let tag_input = &mut tag_buf;
-            egui::containers::menu::MenuButton::new("Reads").config(keep_open()).ui(ui, |ui| {
+            let (reads_r, _) = egui::containers::menu::MenuButton::from_button(reads_button).config(keep_open()).ui(ui, |ui| {
                 ui.menu_button(format!("Colour: {}", crate::session::color_text(style.color).replace("tag:", "tag ")), |ui| color_options(ui, &mut style.color, tag_input));
                 ui.menu_button(format!("Group: {}", group_label(style.group)), |ui| group_options(ui, &mut style.group, here, tag_input));
                 let sort_label = style.sort.map_or_else(|| "Sort".to_owned(), |(p, by)| format!("Sort: {} @ {}", sort_name(by), commas(p + 1)));
@@ -2666,9 +2694,10 @@ impl App {
                 });
                 self.read_window_ui(ui);
             });
+            theme::name_menu(&reads_r, fit.compact, "Reads");
             self.tag_input = tag_buf;
-            if !self.variants.is_empty() {
-                ui.menu_button(if self.review.is_some() { "Variants (reviewing)" } else { "Variants" }, |ui| {
+            if let Some(variants_button) = variants_button {
+                let (variants_r, _) = egui::containers::menu::MenuButton::from_button(variants_button).ui(ui, |ui| {
                     if ui.button("< Previous variant").on_hover_text("Previous variant (Ctrl+B)").clicked() {
                         self.seek_variant(false, None);
                     }
@@ -2689,9 +2718,18 @@ impl App {
                             ui.close();
                         }
                     });
-                            });
+                });
+                theme::name_menu(&variants_r, fit.compact, variants_label);
             }
-            egui::containers::menu::MenuButton::new("View").config(keep_open()).ui(ui, |ui| {
+            if !fit.more {
+                theme::toggle(ui, &mut self.show_evidence, Icon::Evidence, "Evidence").on_hover_text("Exact counts at the outlined base (or the centre)");
+            }
+            });
+            theme::divider(ui);
+
+            // View options: the View menu, then the settings changed from their defaults.
+            let view_button = theme::menu_button(ui, Icon::Eye, "View", fit.compact);
+            let (view_r, _) = theme::group(ui, |ui| egui::containers::menu::MenuButton::from_button(view_button).config(keep_open()).ui(ui, |ui| {
                 if !self.genes.is_empty() {
                     ui.checkbox(&mut self.all_transcripts, "All transcripts");
                 }
@@ -2727,17 +2765,15 @@ impl App {
                         ui.checkbox(&mut self.auto_reload, "Reload files when they change");
                     }
                 }
-            });
+            }));
+            theme::name_menu(&view_r, fit.compact, "View");
             self.style = style;
 
             // Changed settings, each with × to reset it; folded into one menu when they would push
             // Split, Evidence and Commands onto a second row.
             if !chips.is_empty() && fit.chips != ChipFit::Each {
                 let text = if fit.chips == ChipFit::Short { format!("{} changed", chips.len()) } else { format!("{} settings changed", chips.len()) };
-                let label = egui::RichText::new(text).color(ui.visuals().strong_text_color());
-                egui::containers::menu::MenuButton::from_button(
-                    egui::Button::new(label).fill(ui.visuals().selection.bg_fill.gamma_multiply(0.35)).corner_radius(10.0),
-                )
+                egui::containers::menu::MenuButton::from_button(theme::chip(ui, text))
                 .config(keep_open())
                 .ui(ui, |ui| {
                     ui.label(egui::RichText::new("Changed from the defaults (click to reset)").weak());
@@ -2752,23 +2788,20 @@ impl App {
 "));
             } else {
                 for (label, reset) in chips {
-                    // Full-size text in the theme's strong text colour on a light accent fill: the
-                    // small size blurred at 1x scaling.
-                    let chip = egui::Button::new(egui::RichText::new(format!("{label}  ×")).color(ui.visuals().strong_text_color()))
-                        .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.35))
-                        .stroke(egui::Stroke::new(1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.8)))
-                        .corner_radius(10.0);
-                    if ui.add(chip).on_hover_text("Reset to the default").clicked() {
+                    // Full-size text in the accent on a tinted fill: the small size blurred at 1x
+                    // scaling.
+                    if ui.add(theme::chip(ui, format!("{label}  ×"))).on_hover_text("Reset to the default").clicked() {
                         reset(self);
                     }
                 }
             }
 
-            ui.separator();
-            let palette_key = actions::keys_label(actions::Action::Palette.keys().expect("has keys"));
+            // The window's tools.
+            theme::divider(ui);
             if fit.more {
                 // A narrow window: these three in one menu, keeping the toolbar on one row.
-                egui::containers::menu::MenuButton::new("More").config(keep_open()).ui(ui, |ui| {
+                let more_button = theme::menu_button(ui, Icon::More, "More", false);
+                theme::group(ui, |ui| egui::containers::menu::MenuButton::from_button(more_button).config(keep_open()).ui(ui, |ui| {
                     if ui.button("Split").on_hover_text("Open another pane beside this one (same files, its own position)").clicked() {
                         ui.close();
                         self.run(actions::Action::Split, ctx);
@@ -2778,15 +2811,18 @@ impl App {
                         ui.close();
                         self.run(actions::Action::Palette, ctx);
                     }
-                });
+                }));
             } else {
-                if ui.button("Split").on_hover_text("Open another pane beside this one (same files, its own position)").clicked() {
-                    self.run(actions::Action::Split, ctx);
-                }
-                ui.toggle_value(&mut self.show_evidence, "Evidence").on_hover_text("Exact counts at the outlined base (or the centre)");
-                if ui.button("Commands").on_hover_text(format!("Command palette ({palette_key}): genes, places, every action")).clicked() {
-                    self.run(actions::Action::Palette, ctx);
-                }
+                theme::group(ui, |ui| {
+                    if ui.add(theme::labeled(Icon::Split, "Split")).on_hover_text("Open another pane beside this one (same files, its own position)").clicked() {
+                        self.run(actions::Action::Split, ctx);
+                    }
+                    let commands = ui.add(theme::labeled(Icon::Command, "Commands").shortcut_text(theme::key_badge(ui, &palette_key)));
+                    commands.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Commands"));
+                    if commands.on_hover_text(format!("Command palette ({palette_key}): genes, places, every action")).clicked() {
+                        self.run(actions::Action::Palette, ctx);
+                    }
+                });
             }
         });
     }
@@ -2800,19 +2836,38 @@ impl App {
 
     /// How the toolbar fits the row, from the widths of its parts as `ui` draws them.
     fn toolbar_fit(&self, ui: &egui::Ui, chips: &[&str]) -> ToolbarFit {
+        use crate::theme;
         let gap = ui.spacing().item_spacing.x;
         let pad = 2.0 * ui.spacing().button_padding.x;
+        let icon_gap = ui.spacing().icon_spacing;
         let font = egui::TextStyle::Button.resolve(ui.style());
         let mono = egui::TextStyle::Monospace.resolve(ui.style());
+        let small = egui::TextStyle::Small.resolve(ui.style());
         let text_w = |t: String, font: &FontId| ui.fonts_mut(|f| f.layout_no_wrap(t, font.clone(), Color32::WHITE).size().x);
         let button = |t: &str| text_w(t.to_owned(), &font) + pad + gap;
-        let separator = 6.0 + gap;
-        let variants = if self.variants.is_empty() {
-            0.0
-        } else {
-            button(if self.review.is_some() { "Variants (reviewing)" } else { "Variants" })
+        // Inside a group (no spacing between), with a leading icon, and a menu's chevron.
+        let labeled = |t: &str| text_w(t.to_owned(), &font) + pad + theme::ICON + icon_gap;
+        let full_menu = |t: &str| labeled(t) + 8.0 + icon_gap;
+        // Compact: icon and chevron only.
+        let compact_menu = |_: &str| pad + theme::ICON + icon_gap + 8.0;
+        let group = |inner: f32| inner + theme::GROUP_EDGE + gap;
+        let divider = theme::divider_w(ui);
+        let icon_pair = group(2.0 * theme::ICON_BUTTON_W);
+        // Navigation and its gap, the locus box's margins and icon, zoom, then the menus.
+        let fixed = |menu: &dyn Fn(&str) -> f32| {
+            let variants = if self.variants.is_empty() {
+                0.0
+            } else {
+                menu(if self.review.is_some() { "Variants (reviewing)" } else { "Variants" })
+            };
+            icon_pair + (theme::GROUP_GAP - gap).max(0.0)
+                + 16.0 + theme::ICON + icon_gap
+                + (theme::GROUP_GAP - gap).max(0.0) + icon_pair
+                + divider + group(menu("Open"))
+                + divider + group(menu("Reads") + variants)
+                + divider + group(menu("View"))
+                + gap
         };
-        let fixed = ["<", ">", "−", "+", "Open", "Reads", "View"].iter().map(|t| button(t)).sum::<f32>() + variants + separator + gap;
         // The longer of what's typed and the view's locus, with the box's margins and cursor.
         let longest = self.locus_now().filter(|l| l.len() > self.locus_text.len()).unwrap_or_else(|| self.locus_text.clone());
         let locus_need = (text_w(longest, &mono) + 24.0).max(160.0);
@@ -2826,8 +2881,23 @@ impl App {
                 button(&format!("{n} changed")),
             ]
         };
-        let tail = [separator + button("Split") + button("Evidence") + button("Commands"), separator + button("More")];
-        fit_toolbar(ui.available_width(), fixed, button("Go"), locus_need, chips_w, tail)
+        let palette_key = actions::keys_label(actions::Action::Palette.keys().expect("has keys"));
+        let menu = full_menu;
+        let commands = labeled("Commands") + icon_gap + text_w(palette_key, &small);
+        let tail = [
+            labeled("Evidence") + divider + group(labeled("Split") + commands),
+            divider + group(menu("More")),
+        ];
+        let row = ui.available_width();
+        let fit = fit_toolbar(row, fixed(&full_menu), button("Go"), locus_need, chips_w, tail);
+        let used = |fixed: f32, f: &ToolbarFit| {
+            fixed + if f.go { button("Go") } else { 0.0 } + chips_w[f.chips as usize] + tail[usize::from(f.more)] + locus_need
+        };
+        if used(fixed(&full_menu), &fit) <= row {
+            return fit;
+        }
+        // Still too wide with everything folded: the menus show their icons only.
+        ToolbarFit { compact: true, ..fit_toolbar(row, fixed(&compact_menu), button("Go"), locus_need, chips_w, tail) }
     }
 
     /// Display settings changed from their defaults, as short labels with a reset each.
@@ -5318,6 +5388,8 @@ struct ToolbarFit {
     more: bool,
     /// The Go button (Enter in the locus box does the same).
     go: bool,
+    /// The menus as icons only (their names on hover), when nothing else is left to fold.
+    compact: bool,
 }
 
 /// Fits the toolbar into a `row` wide row: `fixed` for the buttons and menus that always show,
@@ -5339,7 +5411,7 @@ fn fit_toolbar(row: f32, fixed: f32, go: f32, locus_need: f32, chips: [f32; 3], 
     let last = options[options.len() - 1];
     let o = options.into_iter().find(|&o| rest(o) + locus_need <= row).unwrap_or(last);
     let locus_w = (row - rest(o)).clamp(locus_need, LOCUS_MAX.max(locus_need));
-    ToolbarFit { locus_w, chips: o.0, more: o.1, go: o.2 }
+    ToolbarFit { locus_w, chips: o.0, more: o.1, go: o.2, compact: false }
 }
 
 /// What a click on a status-bar message did.

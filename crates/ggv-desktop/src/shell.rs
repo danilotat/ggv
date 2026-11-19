@@ -571,7 +571,7 @@ impl eframe::App for Shell {
 
         let n = self.panes.len();
         let split = false;
-        egui::Panel::top("toolbar").show(ui, |ui| {
+        egui::Panel::top("toolbar").frame(crate::theme::toolbar_frame(&ctx)).show(ui, |ui| {
             // Split is in the pane's toolbar; the pane controls get their own line only when
             // there is more than one pane.
             if n > 1 {
@@ -594,7 +594,7 @@ impl eframe::App for Shell {
         let n = self.panes.len();
         let mut clicked = None;
         let mut close = None;
-        let accent = ui.visuals().selection.bg_fill;
+        let accent = crate::theme::palette(ui).accent;
         let fill = ui.visuals().panel_fill;
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
             if n == 1 {
