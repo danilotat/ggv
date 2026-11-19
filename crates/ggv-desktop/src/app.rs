@@ -11,6 +11,7 @@ mod dialogs;
 mod genome;
 mod inspector;
 mod palette;
+mod tool_window;
 mod tools;
 mod track_settings;
 mod variant_info;

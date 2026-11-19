@@ -60,11 +60,13 @@ pub struct SeqUi {
     pub search: Option<seqsearch::Search>,
     pub error: Option<String>,
     pub(super) focused: bool,
+    /// The match last clicked (an index into the search's hits), shown selected.
+    pub(super) chosen: Option<usize>,
 }
 
 impl Default for SeqUi {
     fn default() -> Self {
-        Self { text: String::new(), mismatches: 0, scope: Scope::Genome, search: None, error: None, focused: false }
+        Self { text: String::new(), mismatches: 0, scope: Scope::Genome, search: None, error: None, focused: false, chosen: None }
     }
 }
 
@@ -1299,90 +1301,112 @@ impl App {
         let mut open = true;
         let mut start = false;
         let mut go = None;
+        let red = Color32::from_rgb(200, 60, 60);
+        let can_search = self.reference_path.is_some();
         // Off to the side of the pane: what is found is centred in the view.
         let spot = self.centre_window_pos(ctx, 300.0);
-        super::inspector::placed(ctx, egui::Window::new("Find sequence in the reference"), egui::Id::unique(("seq-search", self.reference_slot)), spot, self.pane_settled())
-            .open(&mut open)
+        super::tool_window::ToolWindow::new("Find sequence", egui::Id::unique(("seq-search", self.reference_slot)))
+            .placed(spot, self.pane_settled())
             .default_width(480.0)
-            .show(ctx, |ui| {
-                if self.reference_path.is_none() {
-                    ui.colored_label(Color32::from_rgb(200, 60, 60), "Open a reference first (Open > Reference).");
+            .min_width(380.0)
+            .show(ctx, &mut open, |ui| {
+                if !can_search {
+                    ui.colored_label(red, "Open a reference first (Open > Reference).");
                 }
-                // It searches the genome sequence only; a match is selected across every track
-                // so you can see the reads there, but the reads themselves aren't searched.
-                ui.label(
-                    egui::RichText::new("Searches the reference genome on both strands, not the reads. Choosing a match selects it across every track.").weak(),
-                );
-                let edit = ui.add(
-                    egui::TextEdit::singleline(&mut s.text)
-                        .hint_text("primer or oligo, 4–64 bases (IUPAC codes allowed)")
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace),
-                );
-                if !s.focused {
-                    edit.request_focus();
-                    s.focused = true;
-                }
-                start |= edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Sequence and Search.
+                ui.horizontal(|ui| {
+                    const SEARCH_W: f32 = 72.0;
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut s.text)
+                            .hint_text("primer or oligo, 4–64 bases (IUPAC codes allowed)")
+                            .desired_width((ui.available_width() - SEARCH_W - ui.spacing().item_spacing.x).max(80.0))
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    if !s.focused {
+                        edit.request_focus();
+                        s.focused = true;
+                    }
+                    start |= edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_search;
+                    let enabled = can_search && !s.text.trim().is_empty();
+                    start |= ui.add_enabled_ui(enabled, |ui| ui.add_sized([SEARCH_W, crate::theme::CONTROL_H], egui::Button::new("Search"))).inner.clicked();
+                });
+                // Mismatches and scope.
                 ui.horizontal(|ui| {
                     ui.label("Mismatches");
                     ui.add(egui::DragValue::new(&mut s.mismatches).range(0..=seqsearch::MAX_MISMATCHES));
-                    ui.separator();
-                    ui.radio_value(&mut s.scope, Scope::View, "View");
-                    ui.radio_value(&mut s.scope, Scope::Contig, "Contig");
-                    ui.radio_value(&mut s.scope, Scope::Genome, "Genome");
+                    ui.add_space(12.0);
+                    ui.label("Scope");
+                    crate::theme::group(ui, |ui| {
+                        ui.selectable_value(&mut s.scope, Scope::View, "View");
+                        ui.selectable_value(&mut s.scope, Scope::Contig, "Contig");
+                        ui.selectable_value(&mut s.scope, Scope::Genome, "Genome");
+                    });
                 });
-                ui.horizontal(|ui| {
-                    start |= ui.add_enabled(self.reference_path.is_some() && !s.text.trim().is_empty(), egui::Button::new("Search both strands")).clicked();
-                    if let Some(sr) = &s.search
-                        && !sr.done
-                        && ui.button("Stop").clicked()
-                    {
-                        sr.cancel();
-                    }
-                });
+                ui.label(egui::RichText::new("Searches both strands. Click a match to select it.").weak());
                 if let Some(e) = &s.error {
-                    ui.colored_label(Color32::from_rgb(200, 60, 60), e);
+                    ui.colored_label(red, e);
                 }
-                if let Some(sr) = &s.search {
-                    ui.separator();
-                    if sr.done {
-                        ui.label(format!(
-                            "{} matches for {} (≤{} mismatches) in {:.1} s{}",
-                            commas(sr.hits.len() as u64),
-                            sr.pattern,
-                            sr.mismatches,
-                            sr.elapsed.map_or(0.0, |d| d.as_secs_f64()),
-                            if sr.truncated { " — stopped at the first 5,000" } else { "" }
-                        ));
-                    } else {
-                        ui.add(egui::ProgressBar::new(sr.progress()).show_percentage().text(format!("{} matches so far", sr.hits.len())));
-                    }
-                    if let Some(e) = &sr.error {
-                        ui.colored_label(Color32::from_rgb(200, 60, 60), e);
-                    }
-                    // Short enough that the window fits GGV's window (560 px high and up).
-                    let list = (ctx.content_rect().height() - 360.0).clamp(90.0, 260.0);
-                    egui::ScrollArea::vertical().max_height(list).show_rows(ui, 18.0, sr.hits.len(), |ui, rows| {
-                        for h in &sr.hits[rows] {
-                            let label = format!(
-                                "{}:{}  {}  {}",
-                                h.contig,
-                                commas(h.start + 1),
-                                if h.reverse { "−" } else { "+" },
-                                if h.mismatches == 0 { "exact".to_owned() } else { format!("{} mismatch{}", h.mismatches, if h.mismatches == 1 { "" } else { "es" }) }
-                            );
-                            if ui.selectable_label(false, egui::RichText::new(label).monospace()).clicked() {
-                                go = Some(h.clone());
-                            }
+                let Some(sr) = &s.search else { return };
+                ui.separator();
+                if !sr.done {
+                    ui.horizontal(|ui| {
+                        if ui.button("Stop").clicked() {
+                            sr.cancel();
+                        }
+                        ui.add(egui::ProgressBar::new(sr.progress()).show_percentage().text(format!("{} matches so far", commas(sr.hits.len() as u64))));
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(seq_summary(sr.hits.len(), sr.mismatches, sr.truncated));
+                        if let Some(d) = sr.elapsed {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(format!("{:.1} s", d.as_secs_f64())).weak());
+                            });
                         }
                     });
                 }
+                if let Some(e) = &sr.error {
+                    ui.colored_label(red, e);
+                }
+                if sr.done && sr.hits.is_empty() {
+                    ui.label(egui::RichText::new("No matches").weak());
+                    return;
+                }
+                let weak = ui.visuals().weak_text_color();
+                let text = ui.visuals().text_color();
+                let mono = egui::TextStyle::Monospace.resolve(ui.style());
+                let body = egui::TextStyle::Body.resolve(ui.style());
+                let row_h = ui.spacing().interact_size.y.max(mono.size + 6.0);
+                // Short enough that the window fits GGV's window (560 px high and up).
+                let list = (ctx.content_rect().height() - 360.0).clamp(90.0, 260.0);
+                egui::ScrollArea::vertical().max_height(list).auto_shrink([false, true]).show_rows(ui, row_h, sr.hits.len(), |ui, rows| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let hits = &sr.hits[rows.clone()];
+                    // Positions padded to the widest visible one, so the strands line up.
+                    let places: Vec<String> = hits.iter().map(|h| format!("{}:{}", h.contig, commas(h.start + 1))).collect();
+                    let w = places.iter().map(|p| p.chars().count()).max().unwrap_or(0);
+                    for ((k, h), place) in rows.zip(hits).zip(places) {
+                        let mut row = format!("{place:<w$}  {}", if h.reverse { "−" } else { "+" });
+                        if sr.mismatches > 0 {
+                            row.push_str(&format!("  {} mm", h.mismatches));
+                        }
+                        let mut job = egui::text::LayoutJob::default();
+                        job.append(&row, 0.0, egui::TextFormat::simple(mono.clone(), text));
+                        if let Some(gene) = self.genes_over(&h.contig, h.start, h.start + sr.len) {
+                            job.append(&gene, 16.0, egui::TextFormat::simple(body.clone(), weak));
+                        }
+                        let r = ui.add_sized([ui.available_width(), row_h], egui::Button::selectable(s.chosen == Some(k), job));
+                        if r.clicked() {
+                            go = Some((k, h.clone()));
+                        }
+                    }
+                });
             });
         if start {
             self.start_seq_search(&mut s, ctx);
         }
-        if let Some(h) = go {
+        if let Some((k, h)) = go {
+            s.chosen = Some(k);
             let len = s.search.as_ref().map_or(20, |x| x.len);
             self.jump_to(&h.contig, h.start + len / 2);
             self.zoom_to_show(len);
@@ -1393,6 +1417,20 @@ impl App {
         if open {
             self.seq = Some(s);
         }
+    }
+
+    /// The genes (any open annotation) overlapping `[start, end)` on `contig`, by name.
+    fn genes_over(&self, contig: &str, start: u64, end: u64) -> Option<String> {
+        let mut names: Vec<&str> = Vec::new();
+        for g in &self.genes {
+            let Some(a) = g.annotation() else { continue };
+            for t in a.query(contig, start, end) {
+                if !t.gene_name.is_empty() && !names.contains(&&*t.gene_name) {
+                    names.push(&t.gene_name);
+                }
+            }
+        }
+        (!names.is_empty()).then(|| names.join(", "))
     }
 
     /// After a jump to a `len`-bp match: zoomed in, if need be, so the match (centred) spans a
@@ -1428,6 +1466,7 @@ impl App {
         match seqsearch::Search::start(reference, &s.text, s.mismatches, regions, ctx) {
             Ok(search) => {
                 s.error = None;
+                s.chosen = None;
                 s.search = Some(search);
             }
             Err(e) => s.error = Some(e),
@@ -2033,5 +2072,30 @@ mod tests {
         let no_supp = count(&f.pileup_options());
         f.hide_supplementary = false;
         assert!(no_supp <= count(&f.pileup_options()));
+    }
+}
+
+/// The sequence search's summary: "1,613 exact matches", or "1,613 matches, up to 2 mismatches".
+fn seq_summary(n: usize, mismatches: u8, truncated: bool) -> String {
+    let count = commas(n as u64);
+    let mut s = match (mismatches, n) {
+        (0, 1) => format!("{count} exact match"),
+        (0, _) => format!("{count} exact matches"),
+        (m, _) => format!("{count} {}, up to {m} mismatch{}", if n == 1 { "match" } else { "matches" }, if m == 1 { "" } else { "es" }),
+    };
+    if truncated {
+        s.push_str(" (stopped at the first 5,000)");
+    }
+    s
+}
+
+#[cfg(test)]
+mod seq_tests {
+    #[test]
+    fn summary_wording() {
+        assert_eq!(super::seq_summary(1613, 0, false), "1,613 exact matches");
+        assert_eq!(super::seq_summary(1, 0, false), "1 exact match");
+        assert_eq!(super::seq_summary(1613, 2, false), "1,613 matches, up to 2 mismatches");
+        assert_eq!(super::seq_summary(5000, 1, true), "5,000 matches, up to 1 mismatch (stopped at the first 5,000)");
     }
 }
