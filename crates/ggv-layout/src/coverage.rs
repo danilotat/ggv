@@ -94,30 +94,102 @@ pub fn coverage_from_reads<'a>(
     region: &Region,
     reference: Option<&[u8]>,
 ) -> Vec<CoverageColumn> {
-    let len = region.len() as usize;
-    let mut aligned = vec![0i32; len + 1];
-    let mut deleted = vec![0i32; len + 1];
-    let mut mismatch_counts = vec![[0u32; 5]; len];
-    // Bases below the minimum base quality: aligned, but not observed (as in a pileup).
-    let mut low = vec![0u32; len];
-
+    let mut acc = ColumnAccumulator::new(region);
     for r in reads {
-        add_spans(&mut aligned, region, block_spans(&r.blocks));
-        add_spans(&mut deleted, region, indel_spans(&r.deletions));
+        acc.add(r);
+    }
+    acc.finish(reference)
+}
+
+/// [`coverage_from_reads`] one read at a time, for loads that count every read but keep only
+/// a sample of them: the coverage is the same as from all the reads.
+pub(crate) struct ColumnAccumulator {
+    region: Region,
+    aligned: Vec<i32>,
+    deleted: Vec<i32>,
+    mismatch_counts: Vec<[u32; 5]>,
+    /// Bases below the minimum base quality: aligned, but not observed (as in a pileup).
+    low: Vec<u32>,
+}
+
+impl ColumnAccumulator {
+    pub(crate) fn new(region: &Region) -> Self {
+        let len = region.len() as usize;
+        Self { region: region.clone(), aligned: vec![0; len + 1], deleted: vec![0; len + 1], mismatch_counts: vec![[0; 5]; len], low: vec![0; len] }
+    }
+
+    pub(crate) fn add(&mut self, r: &AlignedRead) {
+        self.add_within(r, self.region.start, self.region.end);
+    }
+
+    /// Adds the part of `r` within `[from, to)` (and within this region).
+    pub(crate) fn add_within(&mut self, r: &AlignedRead, from: u64, to: u64) {
+        let clip = Region { contig: String::new(), start: from.max(self.region.start), end: to.min(self.region.end) };
+        if clip.start >= clip.end {
+            return;
+        }
+        let origin = self.region.start;
+        // `add_spans` indexes from the region it is given: clip, then shift to this region.
+        let shift = |spans: &mut dyn Iterator<Item = (u64, u64)>, diff: &mut [i32]| {
+            for (s, e) in spans {
+                let (s, e) = (s.max(clip.start), e.min(clip.end));
+                if s < e {
+                    diff[(s - origin) as usize] += 1;
+                    diff[(e - origin) as usize] -= 1;
+                }
+            }
+        };
+        shift(&mut block_spans(&r.blocks), &mut self.aligned);
+        shift(&mut indel_spans(&r.deletions), &mut self.deleted);
         for m in &r.mismatches {
-            if region.contains(m.pos) {
-                mismatch_counts[(m.pos - region.start) as usize][base_index(m.base)] += 1;
+            if clip.contains(m.pos) {
+                self.mismatch_counts[(m.pos - origin) as usize][base_index(m.base)] += 1;
             }
         }
         for &p in &r.low_quality {
-            if region.contains(p) {
-                low[(p - region.start) as usize] += 1;
+            if clip.contains(p) {
+                self.low[(p - origin) as usize] += 1;
             }
         }
     }
 
-    prefix_sum(&aligned)
-        .zip(prefix_sum(&deleted))
+    /// Adds `part`, an accumulator over a piece of this one's region.
+    pub(crate) fn absorb(&mut self, part: &Self) {
+        let offset = (part.region.start - self.region.start) as usize;
+        for (i, d) in part.aligned.iter().enumerate() {
+            if let Some(slot) = self.aligned.get_mut(offset + i) {
+                *slot += d;
+            }
+        }
+        for (i, d) in part.deleted.iter().enumerate() {
+            if let Some(slot) = self.deleted.get_mut(offset + i) {
+                *slot += d;
+            }
+        }
+        for (i, c) in part.mismatch_counts.iter().enumerate() {
+            if let Some(slot) = self.mismatch_counts.get_mut(offset + i) {
+                for k in 0..5 {
+                    slot[k] += c[k];
+                }
+            }
+        }
+        for (i, n) in part.low.iter().enumerate() {
+            if let Some(slot) = self.low.get_mut(offset + i) {
+                *slot += n;
+            }
+        }
+    }
+
+    pub(crate) fn finish(self, reference: Option<&[u8]>) -> Vec<CoverageColumn> {
+        let Self { region, aligned, deleted, mismatch_counts, low } = self;
+        let len = region.len() as usize;
+        columns(&aligned, &deleted, &mismatch_counts, &low, len, reference)
+    }
+}
+
+fn columns(aligned: &[i32], deleted: &[i32], mismatch_counts: &[[u32; 5]], low: &[u32], len: usize, reference: Option<&[u8]>) -> Vec<CoverageColumn> {
+    prefix_sum(aligned)
+        .zip(prefix_sum(deleted))
         .take(len)
         .enumerate()
         .map(|(i, (aligned, deletions))| {

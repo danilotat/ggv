@@ -1990,13 +1990,8 @@ impl App {
         let (vs, ve) = self.visible();
         let view_contig = self.contigs[self.contig].name.clone();
         let opts = ViewOptions {
-            // Read-level loads keep everything mapped and filter in memory; wide loads filter
-            // here, since no reads are kept.
-            filters: if want.reads {
-                ggv_query::PileupOptions { exclude_flags: 0x4, ..Default::default() }
-            } else {
-                self.style.filter.pileup_options()
-            },
+            // Each track's own read filter is set below.
+            filters: Default::default(),
             bins: self.bins_for(&want.region, pixels_per_point),
             tag: self.style.tag(),
             mods: self.style.color == tracks::ColorBy::BaseMods,
@@ -2005,13 +2000,19 @@ impl App {
             max_coverage_bytes: COVERAGE_BYTES,
             // The app packs reads itself (sorting, grouping) on the loader thread.
             max_rows: 0,
+            // As IGV: at most 100 reads drawn per 50 bp of start positions. Coverage and every
+            // count still come from all the reads; the sampled stretches are marked.
+            downsample: Some(ggv_layout::Downsample::default()),
             ..Default::default()
         };
         let styles: Vec<Style> = self.tracks.iter().map(|t| self.track_style(&t.loader.bam_path)).collect();
         for (t, style) in self.tracks.iter_mut().zip(styles) {
             let local = t.contig_name(&view_contig).map(|c| c.name.clone());
             t.receive(local.as_deref(), &mut self.generation);
-            t.ensure_loaded(&want, vs, ve, opts.clone(), style, &mut self.next_request_id);
+            // Filters apply where reads are loaded, as in IGV: reads are sampled, so coverage
+            // can't be recounted from the reads kept, and a filter change loads again.
+            let opts = ViewOptions { filters: style.filter.pileup_options(), ..opts.clone() };
+            t.ensure_loaded(&want, vs, ve, opts, style, &mut self.next_request_id);
             t.apply_style(style, &mut self.generation);
         }
         self.update_reference();
@@ -2072,7 +2073,7 @@ impl App {
         let region = ggv_model::Region { contig: contig.name.clone(), start: vs.saturating_sub(width), end: (ve + width).min(contig.length) };
         let Some((_, reader)) = &mut self.own_reference else { return };
         let Ok(seq) = reader.fetch(&region) else { return };
-        let view = ViewData { region, reference: Some(seq), coverage: ggv_layout::Coverage::Unavailable, reads: None, read_counts: Default::default(), label: String::new() };
+        let view = ViewData { region, reference: Some(seq), coverage: ggv_layout::Coverage::Unavailable, reads: None, read_counts: Default::default(), label: String::new(), downsampled: Vec::new(), reads_left_out: 0 };
         self.generation += 1;
         let set = InstanceSet { generation: self.generation, instances: Arc::new(crate::tracks::build_reference(&view)) };
         self.reference = Some((Arc::new(view), set, (OWN, self.generation)));
@@ -4029,6 +4030,14 @@ impl App {
         let mut header = t.title();
         if let Some(e) = t.current.as_ref().and_then(|c| c.style.filter.expr) {
             header.push_str(&format!("  ·  filter: {}", crate::expr::text(e)));
+        }
+        if let Some(c) = &t.current
+            && c.view.reads_left_out > 0
+        {
+            header.push_str(&format!("  ·  sampled: {} reads not drawn (coverage counts all)", commas(c.view.reads_left_out)));
+        }
+        if t.is_loading() {
+            header.push_str("  ·  loading…");
         }
         if t.missing_contig {
             header.push_str(&format!("  ·  no {} in this file", self.contigs[self.contig].name));

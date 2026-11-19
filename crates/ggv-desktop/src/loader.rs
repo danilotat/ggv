@@ -7,10 +7,17 @@
 //! Read-level loads are kept in a small cache, and while the worker has nothing to do it
 //! decodes the spans either side of the last load (the direction of travel first). Panning
 //! into them, or going back to a place just left, then needs no disk at all.
+//!
+//! A load can take long (a deep region of a remote file), so a request for somewhere else
+//! cancels the one in progress, and any request cancels a span being decoded ahead: the worker
+//! is never stuck on a place the view has left.
 
 use std::{
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc, Mutex, mpsc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -81,6 +88,43 @@ pub struct Loader {
     pub bam_path: PathBuf,
     /// A problem with the file that doesn't stop it opening (no BGZF end-of-file marker).
     pub warning: Option<String>,
+    /// The load the worker is doing now, to cancel when a request makes it useless.
+    active: Arc<Mutex<Option<Active>>>,
+}
+
+/// A load in progress on the worker.
+struct Active {
+    region: Region,
+    /// Whether it loads reads (else coverage only).
+    reads: bool,
+    key: LoadKey,
+    /// Decoding ahead of the view while idle, rather than for a request.
+    ahead: bool,
+    cancel: Arc<AtomicBool>,
+}
+
+/// What, besides the region, makes two loads interchangeable.
+type LoadKey = (Option<[u8; 2]>, bool, tracks::ReadFilter);
+
+fn load_key(req: &Request) -> LoadKey {
+    (req.opts.tag, req.opts.mods, req.style.filter)
+}
+
+impl Active {
+    /// Whether `req` makes this load useless: another contig or kind of load, or a view that
+    /// doesn't touch it. A view panning within or partly over it lets it finish.
+    fn superseded_by(&self, req: &Request) -> bool {
+        self.ahead
+            || self.region.contig != req.region.contig
+            || self.reads != (req.region.len() <= req.opts.max_read_window)
+            || self.key != load_key(req)
+            || req.view.1 <= self.region.start
+            || req.view.0 >= self.region.end
+    }
+}
+
+fn lock(active: &Mutex<Option<Active>>) -> std::sync::MutexGuard<'_, Option<Active>> {
+    active.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Loader {
@@ -104,6 +148,22 @@ impl Loader {
         let (evidence_tx, evidence_rx) = mpsc::channel();
         let (summary_tx, summary_rx) = mpsc::channel();
         let worker_label = label.clone();
+        let active: Arc<Mutex<Option<Active>>> = Arc::default();
+        let worker_active = active.clone();
+        // Marks a load as in progress and returns its cancel flag.
+        let begin = move |req: &Request, ahead: bool| {
+            let cancel = Arc::new(AtomicBool::new(false));
+            *lock(&worker_active) = Some(Active {
+                region: req.region.clone(),
+                reads: req.region.len() <= req.opts.max_read_window,
+                key: load_key(req),
+                ahead,
+                cancel: cancel.clone(),
+            });
+            cancel
+        };
+        let worker_active = active.clone();
+        let end = move || *lock(&worker_active) = None;
 
         thread::Builder::new().name("ggv-loader".into()).spawn(move || {
             let mut bam = bam;
@@ -122,9 +182,15 @@ impl Loader {
                     Err(mpsc::TryRecvError::Empty) => {
                         if let Some((region, opts)) = ahead.pop() {
                             if !cache.covers(&region) {
-                                let req = Request { id: 0, view: (region.start, region.end), region, opts, style: tracks::Style::default() };
-                                if let Ok(view) = load(&mut bam, reference.as_mut(), whole.as_ref(), &req, &worker_label)
+                                let mut req = Request { id: 0, view: (region.start, region.end), region, opts, style: tracks::Style::default() };
+                                req.style.filter = cache.filter.unwrap_or_default();
+                                let cancel = begin(&req, true);
+                                req.opts.cancel = Some(cancel.clone());
+                                let view = load(&mut bam, reference.as_mut(), whole.as_ref(), &req, &worker_label);
+                                end();
+                                if let Ok(view) = view
                                     && view.reads.is_some()
+                                    && !cancel.load(Ordering::Relaxed)
                                 {
                                     cache.put(Arc::new(view));
                                 }
@@ -166,10 +232,10 @@ impl Loader {
                         }
                     }
                 }
-                let Some(req) = latest else { continue };
-                if (req.opts.tag, req.opts.mods) != (cache.tag, cache.mods) {
+                let Some(mut req) = latest else { continue };
+                if (req.opts.tag, req.opts.mods, Some(req.style.filter)) != (cache.tag, cache.mods, cache.filter) {
                     cache.views.clear();
-                    (cache.tag, cache.mods) = (req.opts.tag, req.opts.mods);
+                    (cache.tag, cache.mods, cache.filter) = (req.opts.tag, req.opts.mods, Some(req.style.filter));
                     ahead.clear();
                 }
                 let t = Instant::now();
@@ -178,13 +244,24 @@ impl Loader {
                 let from_memory = cached.is_some();
                 let view = match cached {
                     Some(v) => Ok(v),
-                    None => load(&mut bam, reference.as_mut(), whole.as_ref(), &req, &worker_label).map(|v| {
-                        let v = Arc::new(v);
-                        if v.reads.is_some() {
-                            cache.put(v.clone());
+                    None => {
+                        let cancel = begin(&req, false);
+                        req.opts.cancel = Some(cancel.clone());
+                        let view = load(&mut bam, reference.as_mut(), whole.as_ref(), &req, &worker_label);
+                        end();
+                        if cancel.load(Ordering::Relaxed) {
+                            // The view has left: drop it unanswered, the request that cancelled
+                            // it is queued.
+                            continue;
                         }
-                        v
-                    }),
+                        view.map(|v| {
+                            let v = Arc::new(v);
+                            if v.reads.is_some() {
+                                cache.put(v.clone());
+                            }
+                            v
+                        })
+                    }
                 };
                 // Plan the spans either side for when the worker is idle, the way the view is
                 // going first (popped from the end).
@@ -239,18 +316,34 @@ impl Loader {
             }
         })?;
 
-        Ok(Self { tx, rx, evidence_rx, summary_rx, contigs, label, bam_path, warning })
+        Ok(Self { tx, rx, evidence_rx, summary_rx, contigs, label, bam_path, warning, active })
     }
 
     pub fn request(&self, req: Request) {
+        if let Some(a) = lock(&self.active).as_ref()
+            && a.superseded_by(&req)
+        {
+            a.cancel.store(true, Ordering::Relaxed);
+        }
         let _ = self.tx.send(Job::Load(req));
     }
 
+    /// Stops a span being decoded ahead, so a request doesn't wait behind it.
+    fn cancel_ahead(&self) {
+        if let Some(a) = lock(&self.active).as_ref()
+            && a.ahead
+        {
+            a.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
     pub fn request_summary(&self, id: u64, region: ggv_model::Region, opts: ggv_query::SummaryOptions) {
+        self.cancel_ahead();
         let _ = self.tx.send(Job::Summary { id, region, opts });
     }
 
     pub fn request_pileup(&self, id: u64, contig: String, pos: u64, opts: ggv_query::PileupOptions) {
+        self.cancel_ahead();
         let _ = self.tx.send(Job::Pileup { id, contig, pos, opts });
     }
 }
@@ -318,6 +411,8 @@ struct Cache {
     /// loaded for another tag, or without calls the view now draws, are no use.
     tag: Option<[u8; 2]>,
     mods: bool,
+    /// The read filter the cached spans were loaded with (filters apply at load).
+    filter: Option<tracks::ReadFilter>,
 }
 
 impl Cache {

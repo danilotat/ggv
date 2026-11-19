@@ -531,7 +531,15 @@ fn coverage_instances(b: &mut Builder, view: &ViewData, coverage: &Coverage, sca
         }
         Coverage::Unavailable => {}
     }
+    // Where reads were sampled (more start there than are drawn), a bar between the coverage
+    // and the reads, as IGV marks its downsampled stretches. Coverage counts every read.
+    for &(s, e) in &view.downsampled {
+        b.push(s.max(view.region.start), e.min(view.region.end), SEPARATOR_Y + 1.0, SEPARATOR_Y + 3.5, DOWNSAMPLED, 0, ALWAYS);
+    }
 }
+
+/// The bar under the coverage marking sampled stretches: a mid grey that shows on either theme.
+const DOWNSAMPLED: u32 = 0xff6e_6e6e;
 
 /// Allele segments share the column's height in proportion to their counts (so the log scale
 /// keeps the proportions readable).

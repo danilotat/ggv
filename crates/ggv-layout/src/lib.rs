@@ -12,9 +12,15 @@ pub mod phase;
 mod read;
 
 pub use coverage::{Coverage, CoverageBin, CoverageColumn, coverage_from_reads};
+use coverage::ColumnAccumulator;
 pub use pack::{Group, GroupBy, PackOptions, Packed, SortBy, pack, pack_indices, pack_with, extent, repack, same_template, pack_sticky, row_hints, RowHints};
 pub use ggv_query::ReadPredicate;
 pub use read::{AlignedRead, Block, Indel, Mate, Mismatch, ModCall, SplitAlignment, decode, decode_parts, decode_with, parse_sa, parse_tag_name, read_bases, tag_text};
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use ggv_io::{BamFile, pasta::pileup::Read};
 use ggv_model::Region;
@@ -44,6 +50,28 @@ pub struct ViewOptions {
     pub mods: bool,
     /// Spans at least twice this long are decoded on several threads. Default [`READ_CHUNK`].
     pub read_chunk: u64,
+    /// Keep at most this many reads per window of start positions (IGV's downsampling). Every
+    /// read is still read and counted: coverage and read counts are those of all the reads,
+    /// only the reads kept to draw are fewer. Default: off (every read kept).
+    pub downsample: Option<Downsample>,
+    /// Set (from another thread) to stop a load early; it then returns an error of kind
+    /// `Interrupted`. Checked at every record.
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+/// How reads are sampled when a region is deeper than can usefully be drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Downsample {
+    /// Bases per window of read start positions. IGV: 50.
+    pub window: u64,
+    /// Reads kept per window. IGV: 100.
+    pub count: usize,
+}
+
+impl Default for Downsample {
+    fn default() -> Self {
+        Self { window: 50, count: 100 }
+    }
 }
 
 impl Default for ViewOptions {
@@ -59,6 +87,8 @@ impl Default for ViewOptions {
             tag: None,
             mods: true,
             read_chunk: READ_CHUNK,
+            downsample: None,
+            cancel: None,
         }
     }
 }
@@ -75,6 +105,12 @@ pub struct ViewData {
     pub read_counts: ReadCounts,
     /// A label for the track, e.g. the sample name or file name.
     pub label: String,
+    /// Where reads were left out by [`ViewOptions::downsample`]: merged `[start, end)` windows
+    /// of read start positions, in order. Empty when every read is kept.
+    pub downsampled: Vec<(u64, u64)>,
+    /// Reads that passed the filters but were left out by downsampling (counted in coverage
+    /// and `read_counts`, not in `reads`).
+    pub reads_left_out: u64,
 }
 
 /// The fixed fields of an encoded BAM record (without `block_size`) needed for depth.
@@ -134,10 +170,18 @@ pub fn load_view(
         // Decoding (every base against the reference) is most of a load: wide spans are cut
         // into chunks decoded on several threads, each keeping the reads that start in it, and
         // joined in order, so the reads and counts are the same as one pass.
+        let sampling = opts.downsample.filter(|d| d.window > 0 && d.count > 0);
+        let cancel = opts.cancel.as_deref();
         let parts = ggv_query::chunks::run_sized(bam, region, opts.read_chunk, |b, chunk, count_from| {
-            let mut reads = Vec::new();
+            let mut sampler = Sampler::new(sampling);
             let mut counts = ReadCounts::default();
+            // Sampling: coverage is counted here from every read, before any is left out.
+            // A read running past the chunk is counted up to its end and the rest kept aside,
+            // added once the chunks are joined (each chunk counts only its own bases).
+            let mut cov = sampling.map(|_| ColumnAccumulator::new(chunk));
+            let mut spill = Vec::new();
             b.for_each_record(chunk, |record| {
+                check_cancel(cancel)?;
                 let read = Read::new(record.as_ref().to_vec())?;
                 if count_from > 0 && read.position() < count_from as i64 {
                     return Ok(()); // an earlier chunk has it
@@ -154,18 +198,47 @@ pub fn load_view(
                     if ref_slice.is_none() {
                         decoded.bases = Some(read_bases(&read));
                     }
-                    reads.push(decoded);
+                    if let Some(cov) = &mut cov {
+                        cov.add(&decoded);
+                        if decoded.end > chunk.end && chunk.end < region.end {
+                            spill.push(decoded.clone());
+                        }
+                    }
+                    sampler.push(decoded);
                 }
                 Ok(())
             })?;
-            Ok((reads, counts))
+            let (reads, left_out, windows) = sampler.finish();
+            Ok(Part { reads, counts, cov, spill, chunk_end: chunk.end, left_out, windows })
         })?;
-        let mut reads = Vec::with_capacity(parts.iter().map(|p| p.0.len()).sum());
-        for (r, c) in parts {
-            reads.extend(r);
-            counts.merge(&c);
+        let mut reads = Vec::with_capacity(parts.iter().map(|p| p.reads.len()).sum());
+        let mut downsampled: Vec<(u64, u64)> = Vec::new();
+        let mut reads_left_out = 0;
+        let mut whole_cov = sampling.map(|_| ColumnAccumulator::new(region));
+        for p in parts {
+            if let Some(acc) = &mut whole_cov {
+                if let Some(c) = &p.cov {
+                    acc.absorb(c);
+                }
+                for r in &p.spill {
+                    acc.add_within(r, p.chunk_end, region.end);
+                }
+            }
+            reads.extend(p.reads);
+            counts.merge(&p.counts);
+            reads_left_out += p.left_out;
+            for w in p.windows {
+                match downsampled.last_mut() {
+                    Some(last) if last.1 >= w.0 => last.1 = last.1.max(w.1),
+                    _ => downsampled.push(w),
+                }
+            }
         }
-        let coverage = Coverage::PerBase(coverage_from_reads(&reads, region, reference.as_deref()));
+        let columns = match whole_cov {
+            Some(acc) => acc.finish(reference.as_deref()),
+            None => coverage_from_reads(&reads, region, reference.as_deref()),
+        };
+        let coverage = Coverage::PerBase(columns);
         let packed = pack(&reads, opts.max_rows, opts.min_gap);
         return Ok(ViewData {
             region: region.clone(),
@@ -174,6 +247,8 @@ pub fn load_view(
             reads: Some((reads, packed)),
             read_counts: counts,
             label,
+            downsampled,
+            reads_left_out,
         });
     }
 
@@ -187,21 +262,140 @@ pub fn load_view(
     let coverage = match estimated {
         Some(c) => c,
         None if countable => {
-            let (depth, c) = binned_depth(bam, region, &opts.filters)?;
+            let (depth, c) = binned_depth(bam, region, &opts.filters, opts.cancel.as_deref())?;
             counts = c;
             Coverage::Binned(depth.into_bins(opts.bins))
         }
         None => Coverage::Unavailable,
     };
 
-    Ok(ViewData { region: region.clone(), reference, coverage, reads: None, read_counts: counts, label })
+    Ok(ViewData { region: region.clone(), reference, coverage, reads: None, read_counts: counts, label, downsampled: Vec::new(), reads_left_out: 0 })
+}
+
+/// One chunk of a read-level load.
+struct Part {
+    reads: Vec<AlignedRead>,
+    counts: ReadCounts,
+    /// Coverage of every admitted read over the chunk (when sampling).
+    cov: Option<ColumnAccumulator>,
+    /// Reads running past the chunk's end, for the coverage beyond it.
+    spill: Vec<AlignedRead>,
+    chunk_end: u64,
+    left_out: u64,
+    windows: Vec<(u64, u64)>,
+}
+
+/// The error a cancelled load stops with.
+fn check_cancel(cancel: Option<&AtomicBool>) -> std::io::Result<()> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "load cancelled"));
+    }
+    Ok(())
+}
+
+/// Keeps at most `count` reads per window of start positions, as records stream past in
+/// coordinate order, so memory stays bounded however deep the region.
+///
+/// The reads kept in a window are the `count` with the smallest hash of their name: the same
+/// reads on every load of the same place (no flicker on reload), and mates (one name) tend to
+/// be kept or left out together, as IGV keeps pairs.
+struct Sampler {
+    rule: Option<Downsample>,
+    window: Option<u64>,
+    heap: std::collections::BinaryHeap<Sampled>,
+    /// Whether the current window has left a read out.
+    full: bool,
+    seq: u64,
+    out: Vec<AlignedRead>,
+    left_out: u64,
+    windows: Vec<(u64, u64)>,
+}
+
+struct Sampled {
+    key: (u64, u64),
+    read: AlignedRead,
+}
+
+impl PartialEq for Sampled {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+impl Eq for Sampled {}
+impl PartialOrd for Sampled {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Sampled {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.key.cmp(&other.key)
+    }
+}
+
+/// A well-mixed 64-bit hash of a read name (FNV-1a, then a SplitMix64 finish).
+fn name_hash(name: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    }
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94d0_49bb_1331_11eb);
+    h ^ (h >> 31)
+}
+
+impl Sampler {
+    fn new(rule: Option<Downsample>) -> Self {
+        Self { rule, window: None, heap: Default::default(), full: false, seq: 0, out: Vec::new(), left_out: 0, windows: Vec::new() }
+    }
+
+    fn push(&mut self, read: AlignedRead) {
+        let Some(rule) = self.rule else {
+            self.out.push(read);
+            return;
+        };
+        let w = read.start / rule.window;
+        if self.window != Some(w) {
+            self.flush();
+            self.window = Some(w);
+        }
+        self.seq += 1;
+        self.heap.push(Sampled { key: (name_hash(&read.name), self.seq), read });
+        if self.heap.len() > rule.count {
+            self.heap.pop();
+            self.left_out += 1;
+            self.full = true;
+        }
+    }
+
+    /// Moves the current window's reads to the output, in the order they came (by position).
+    fn flush(&mut self) {
+        let (Some(rule), Some(w)) = (self.rule, self.window) else { return };
+        let mut kept: Vec<Sampled> = std::mem::take(&mut self.heap).into_vec();
+        kept.sort_by_key(|s| s.key.1);
+        self.out.extend(kept.into_iter().map(|s| s.read));
+        if std::mem::take(&mut self.full) {
+            let span = (w * rule.window, (w + 1) * rule.window);
+            match self.windows.last_mut() {
+                Some(last) if last.1 == span.0 => last.1 = span.1,
+                _ => self.windows.push(span),
+            }
+        }
+    }
+
+    fn finish(mut self) -> (Vec<AlignedRead>, u64, Vec<(u64, u64)>) {
+        self.flush();
+        (self.out, self.left_out, self.windows)
+    }
 }
 
 /// Depth over `region` from every read that passes `filters`, without keeping reads: in one
 /// pass, or for a long region in chunks on several threads, added up to the same depth and the
 /// same read counts (see [`ggv_query::chunks`]).
-fn binned_depth(bam: &mut BamFile, region: &Region, filters: &PileupOptions) -> ggv_query::Result<(coverage::DepthAccumulator, ReadCounts)> {
-    let parts = ggv_query::chunks::run(bam, region, |b, chunk, count_from| depth_pass(b, chunk, filters, count_from))?;
+fn binned_depth(bam: &mut BamFile, region: &Region, filters: &PileupOptions, cancel: Option<&AtomicBool>) -> ggv_query::Result<(coverage::DepthAccumulator, ReadCounts)> {
+    let parts = ggv_query::chunks::run(bam, region, |b, chunk, count_from| depth_pass(b, chunk, filters, count_from, cancel))?;
     let mut depth = coverage::DepthAccumulator::new(region);
     let mut counts = ReadCounts::default();
     for (d, c) in parts {
@@ -212,11 +406,12 @@ fn binned_depth(bam: &mut BamFile, region: &Region, filters: &PileupOptions) -> 
 }
 
 /// One pass of [`binned_depth`]; reads starting before `count_from` add depth but aren't counted.
-fn depth_pass(bam: &mut BamFile, region: &Region, filters: &PileupOptions, count_from: u64) -> ggv_query::Result<(coverage::DepthAccumulator, ReadCounts)> {
+fn depth_pass(bam: &mut BamFile, region: &Region, filters: &PileupOptions, count_from: u64, cancel: Option<&AtomicBool>) -> ggv_query::Result<(coverage::DepthAccumulator, ReadCounts)> {
     let mut depth = coverage::DepthAccumulator::new(region);
     let mut counts = ReadCounts::default();
     let fast = filters.read_filter.is_none();
     bam.for_each_record(region, |record| {
+        check_cancel(cancel)?;
         let raw = record.as_ref();
         let mut scratch = ReadCounts::default();
         match raw_fields(raw).filter(|_| fast) {

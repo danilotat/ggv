@@ -30,7 +30,8 @@ pub struct Span {
     pub reads: bool,
     /// Bases per coverage bin, for binned loads.
     pub bp_per_bin: Option<f64>,
-    /// The read filter applied at load (binned loads only; read-level loads filter in memory).
+    /// The read filter applied at load (every load: reads are sampled, so a different filter
+    /// needs the file read again).
     pub filter: Option<tracks::ReadFilter>,
     /// The tag reads were loaded with (for colouring or grouping by it).
     pub tag: Option<[u8; 2]>,
@@ -204,7 +205,7 @@ impl Track {
             return;
         };
         self.missing_contig = false;
-        want.filter = (!want.reads).then_some(style.filter);
+        want.filter = Some(style.filter);
         want.tag = style.tag();
         if self.current.as_ref().is_some_and(|c| c.span.satisfies(&want, vs, ve))
             || self.requested.as_ref().is_some_and(|(_, s)| s.satisfies(&want, vs, ve))
@@ -312,7 +313,6 @@ impl Track {
         // coverage only, the span must not claim reads, or the view would never reload.
         span.reads = loaded.view.reads.is_some();
         if span.reads {
-            span.filter = None;
             // A cached span may be larger than, or shifted from, what was asked for.
             span.region = loaded.view.region.clone();
         }

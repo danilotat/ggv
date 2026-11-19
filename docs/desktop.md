@@ -153,8 +153,15 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
   identical to samtools-made ones.
 - **Back / Forward** (`<` `>` or Alt+Left / Alt+Right) step through the places you jumped to
   (locus box, gene names, variant and mate jumps).
-- **Filters** (hide duplicates, secondary, supplementary, QC-fail; minimum MAPQ) apply live from
-  memory to reads, coverage and counts, and match what loading with the same filters gives.
+- **Filters** (hide duplicates, secondary, supplementary, QC-fail; minimum MAPQ) apply where
+  reads are loaded, to reads, coverage and counts alike, so changing one loads the span again
+  (as in IGV). They match `ggv query` with the same filters.
+- **Deep regions are sampled, as in IGV**: at most 100 reads are kept per 50 bp of read start
+  positions. Coverage, allele counts and read counts still come from every read; only the reads
+  drawn are fewer. A grey bar under the coverage marks the stretches where reads were left out,
+  and the track header says how many (`sampled: N reads not drawn`). The same reads are kept on
+  every load, and mates tend to be kept or left out together. Zoom in to see the rest. Every
+  read is still read, so a deep region of a remote file costs its whole download.
 - **Coverage** scale: autoscale to the view, to the loaded data, or log; optionally the same
   scale for every track.
 - **Session → Export view as PNG…** saves the tracks exactly as drawn. **Dark** switches theme.
@@ -325,7 +332,9 @@ How it stays fast:
 - **Loading never blocks drawing.** A background thread loads about 3 view widths (at least
   20 kb), decodes reads once, derives coverage from them, and builds the instances. The UI
   uploads them when they arrive. While you keep moving, any result newer than what's on screen
-  is shown, so data streams in mid-fling.
+  is shown, so data streams in mid-fling. A load the view has left (another contig, a jump, a
+  filter change) is cancelled, and so is a span decoded ahead, so a slow load (a deep region of
+  a remote file) never holds up the next one; the track header says `loading…` meanwhile.
 - **Only visible text is laid out per frame**: the ruler, and letters and labels for the rows
   and bases in view.
 - **Wide loads decode on several threads**: spans of 500 kb or more are cut into chunks decoded
