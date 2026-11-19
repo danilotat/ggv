@@ -35,7 +35,13 @@ header when a file lacks the contig.
   MCP `group_by` / `color_by` `tag:CB`). Reads are reloaded with the tag when it changes.
 - **Link split reads** (checkbox, `--link`, MCP `link`): each split read's primary and
   supplementary records go on one row, joined by a thin blue line, in the primary's group (as
-  IGV's "link supplementary alignments"); mates of a pair are never joined.
+  IGV's "link supplementary alignments"); mates of a pair are joined only by **View as pairs**.
+- **View as pairs** (checkbox in Reads and the right-click menu, `--pairs`, MCP `pairs`): the two
+  mates of each pair (their primary records) go on one row, joined by a grey line across the
+  insert, as IGV's "view as pairs". A pair goes in its leftmost mate's group and sorts by the mate
+  over the sort base. A mate whose partner isn't loaded (further than the read window, or on
+  another contig) is drawn alone; secondary and supplementary records stay apart unless **Link
+  split reads** is on too, which puts a split mate's parts on its pair's row.
 - **Colour** by strand, haplotype, or insert size and pair orientation: inserts above the
   99.5th / below the 0.5th percentile of the loaded pairs red / blue, mate on another contig
   orange, outward (RL, for mates that don't overlap) green, same-strand LL teal / RR dark blue.

@@ -2683,6 +2683,7 @@ impl App {
                 ui.checkbox(&mut style.squished, "Squish rows");
                 ui.checkbox(&mut style.soft_clips, "Soft clips");
                 ui.checkbox(&mut style.link_splits, "Link split reads").on_hover_text("Put each split read's parts (primary and supplementary) on one row, joined, in its primary's group");
+                ui.checkbox(&mut style.view_pairs, "View as pairs").on_hover_text("Put the two mates of each pair on one row, joined by a line across the insert, in the leftmost mate's group");
                 ui.checkbox(&mut style.junctions, "Junctions").on_hover_text("Splice junctions (RNA-seq) as arcs over the coverage, with their read counts: red + strand, blue −, grey unknown");
                 ui.separator();
                 ui.menu_button("Coverage", |ui| {
@@ -2933,6 +2934,9 @@ impl App {
         }
         if st.link_splits {
             v.push(("linked splits".into(), |a| a.style.link_splits = false));
+        }
+        if st.view_pairs {
+            v.push(("pairs".into(), |a| a.style.view_pairs = false));
         }
         if st.junctions {
             v.push(("junctions".into(), |a| a.style.junctions = false));
@@ -3454,6 +3458,7 @@ impl App {
         ui.menu_button(format!("Colour: {}", crate::session::color_text(style.color).replace("tag:", "tag ")), |ui| color_options(ui, &mut style.color, tag_input));
         ui.checkbox(&mut style.soft_clips, "Show soft-clipped bases");
         ui.checkbox(&mut style.link_splits, "Link split reads");
+        ui.checkbox(&mut style.view_pairs, "View as pairs");
         ui.checkbox(&mut style.squished, "Squish");
         ui.checkbox(&mut style.junctions, "Splice junctions");
         self.style = style;

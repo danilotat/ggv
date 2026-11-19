@@ -74,7 +74,7 @@ impl App {
             "filters": filters,
             "display": {
                 "color": s.color, "group": s.group, "group_pos": s.group_pos, "sort": s.sort,
-                "soft_clips": s.soft_clips, "squished": s.squished, "junctions": s.junctions, "all_transcripts": s.all_transcripts, "link_splits": s.link_splits,
+                "soft_clips": s.soft_clips, "squished": s.squished, "junctions": s.junctions, "all_transcripts": s.all_transcripts, "link_splits": s.link_splits, "view_pairs": s.view_pairs,
                 "read_window": super::read_window(),
                 "variant_colors": self.variants.iter().map(|v| (v.file_name(), json!(v.color.name()))).collect::<serde_json::Map<_, _>>(),
                 "filter": {
@@ -258,6 +258,9 @@ impl App {
         }
         if let Some(b) = flag("link_splits")? {
             style.link_splits = b;
+        }
+        if let Some(b) = flag("view_pairs")? {
+            style.view_pairs = b;
         }
         if let Some(b) = flag("soft_clips")? {
             style.soft_clips = b;

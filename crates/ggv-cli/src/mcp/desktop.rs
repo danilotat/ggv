@@ -322,6 +322,10 @@ pub fn fill(tool: &str, args: &Value, pane: &Value) -> (Value, serde_json::Map<S
         a["link"] = json!(true);
         applied.insert("link".into(), json!({"value": true, "from": "display"}));
     }
+    if tool == "render" && !has(&a, "pairs") && pane["display"]["view_pairs"] == json!(true) {
+        a["pairs"] = json!(true);
+        applied.insert("pairs".into(), json!({"value": true, "from": "display"}));
+    }
     // Grouping too, except by base (a picture of the view has no single base to group at).
     if tool == "render" && !has(&a, "group_by")
         && let Some(g) = pane["display"]["group"].as_str().filter(|g| ["strand", "haplotype", "read group", "alleles"].contains(g) || g.starts_with("tag:"))

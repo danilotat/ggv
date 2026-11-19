@@ -205,6 +205,9 @@ struct BatchArgs {
     /// Put each split read's parts (primary and supplementary) on one row, joined.
     #[arg(long)]
     link: bool,
+    /// View as pairs: put the two mates of a pair on one row, joined by a line across the insert.
+    #[arg(long)]
+    pairs: bool,
     /// The tag for `--color-by tag` / `--group tag` (CB, PS, UB, MI...).
     #[arg(long, value_name = "XX", value_parser = parse_tag_arg)]
     tag: Option<[u8; 2]>,
@@ -240,6 +243,9 @@ struct RenderArgs {
     /// Put each split read's parts (primary and supplementary) on one row, joined.
     #[arg(long)]
     link: bool,
+    /// View as pairs: put the two mates of a pair on one row, joined by a line across the insert.
+    #[arg(long)]
+    pairs: bool,
     /// Draw splice junctions (RNA-seq) as a sashimi band under the coverage: an arc per intron
     /// with its read count, + strand above the line and − below.
     #[arg(long)]
@@ -674,6 +680,7 @@ fn run(mut cli: Cli) -> Result<()> {
             group: group_of(args.group, Some(u64::MAX), args.tag)?,
             tag: tag_needed(args.color_by, args.group, args.tag)?,
             link: args.link,
+            pairs: args.pairs,
             })?;
             if outcome.written == 0 {
                 anyhow::bail!("no place was written ({} failed; see summary.tsv)", outcome.failed);
@@ -998,14 +1005,15 @@ fn render(args: &RenderArgs) -> Result<()> {
         (Some(_), None) => bail!("--sort needs a single-base locus"),
         (None, _) => None,
     };
-    if args.group != GroupArg::None || sort.is_some() || args.link {
-        ggv_layout::repack(&mut view, args.max_rows, group_of(args.group, base, args.tag)?, sort, args.link);
+    if args.group != GroupArg::None || sort.is_some() || args.link || args.pairs {
+        ggv_layout::repack(&mut view, args.max_rows, group_of(args.group, base, args.tag)?, sort, args.link, args.pairs);
     }
 
     let render_opts = ggv_render::RenderOptions {
         width: args.width,
         color_by: color_of(args.color_by),
         link: args.link,
+        pairs: args.pairs,
         highlight,
         sashimi: args.sashimi,
         min_junction_reads: args.min_junction_reads,

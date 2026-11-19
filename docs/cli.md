@@ -63,10 +63,12 @@ ggv render hifi.bam chr20:58888000-58890000 -f ref.fa --color-by base-mods -o me
 size) or `base-mods` (5mC and other MM/ML calls, red likely modified, blue not), with the app's
 colours. `--group` puts reads in labelled bands as the app does: `strand`, `haplotype`,
 `read-group`, `alleles` (phased from the reads' own alleles) or, for a single base, `base`;
-`--sort` orders them by what they show at a single base. `--color-by base-mods --group
-haplotype` shows allele-specific methylation (imprinting) at a glance. `ggv batch` takes
-`--color-by` and `--group` too, and MCP `render` takes `color_by` and `group_by` (attached, it
-uses the window's colouring and grouping).
+`--sort` orders them by what they show at a single base. `--pairs` puts each pair's mates on
+one row joined across the insert (IGV's "view as pairs"), and `--link` each split read's parts.
+`--color-by base-mods --group haplotype` shows allele-specific methylation (imprinting) at a
+glance. `ggv batch` takes `--color-by`, `--group`, `--pairs` and `--link` too, and MCP `render`
+takes `color_by`, `group_by`, `pairs` and `link` (attached, it uses the window's colouring,
+grouping, pairs and linking).
 
 Renders follow IGV's conventions: coverage with allele-coloured bars where ≥20% of reads
 disagree with the reference, reads packed into rows (squished past 40 rows), mismatches

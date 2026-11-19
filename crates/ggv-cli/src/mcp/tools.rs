@@ -284,7 +284,7 @@ fn data_tools() -> Vec<Value> {
             "render",
             "Picture",
             "A PNG of a base (with 50 bp each side, outlined) or a region, every alignment file stacked, as IGV would show it. For clients that can see images, or to show a person; the numbers are in `evidence`.",
-            schema(&[], &[json!({"locus": {"type": "string"}, "region": {"type": "string"}, "width": {"type": "integer", "minimum": 300, "maximum": 2400, "description": "Default 1000."}, "color_by": {"type": "string", "description": "Read colours: none (grey, default), strand, haplotype (HP tag), insert-size (pair orientation and insert size), base-mods (methylation, MM/ML), or tag:XX (one colour per value of any tag, e.g. tag:CB)."}, "group_by": {"type": "string", "description": "Group reads into labelled bands: none (default), strand, haplotype (HP tag), read group, alleles (heterozygous sites), base (for a single base: what each read shows there), or tag:XX (by any tag's value, e.g. tag:CB, tag:PS)."}, "link": {"type": "boolean", "description": "Put each split read's parts (primary and supplementary) on one row, joined. Default false."}, "sashimi": {"type": "boolean", "description": "Draw splice junctions (RNA-seq) under each file's coverage: an arc per intron with its read count, + strand above and − below. Default false."}, "min_junction_reads": {"type": "integer", "minimum": 1, "description": "With sashimi: leave out junctions with fewer reads (default 2)."}}), files_schema(), filter_schema()]),
+            schema(&[], &[json!({"locus": {"type": "string"}, "region": {"type": "string"}, "width": {"type": "integer", "minimum": 300, "maximum": 2400, "description": "Default 1000."}, "color_by": {"type": "string", "description": "Read colours: none (grey, default), strand, haplotype (HP tag), insert-size (pair orientation and insert size), base-mods (methylation, MM/ML), or tag:XX (one colour per value of any tag, e.g. tag:CB)."}, "group_by": {"type": "string", "description": "Group reads into labelled bands: none (default), strand, haplotype (HP tag), read group, alleles (heterozygous sites), base (for a single base: what each read shows there), or tag:XX (by any tag's value, e.g. tag:CB, tag:PS)."}, "link": {"type": "boolean", "description": "Put each split read's parts (primary and supplementary) on one row, joined. Default false."}, "pairs": {"type": "boolean", "description": "View as pairs: put the two mates of a pair on one row, joined by a grey line across the insert, grouped by the leftmost mate. Default false."}, "sashimi": {"type": "boolean", "description": "Draw splice junctions (RNA-seq) under each file's coverage: an arc per intron with its read count, + strand above and − below. Default false."}, "min_junction_reads": {"type": "integer", "minimum": 1, "description": "With sashimi: leave out junctions with fewer reads (default 2)."}}), files_schema(), filter_schema()]),
         ),
     ]
 }
@@ -806,6 +806,7 @@ impl State {
                 "squished": {"type": "boolean"},
                 "junctions": {"type": "boolean", "description": "Splice junctions (RNA-seq) as arcs over each track's coverage, with read counts."},
                 "link_splits": {"type": "boolean", "description": "Split reads' parts on one row, joined."},
+                "view_pairs": {"type": "boolean", "description": "View as pairs: each pair's mates on one row, joined across the insert."},
                 "read_window": {"type": "integer", "minimum": 10000, "maximum": 50000000, "description": "Show reads for views up to this many bases (the app's default is 50000; wider views show coverage). Remembered by the app."},
                 "all_transcripts": {"type": "boolean"},
                 "filter": {"type": "object", "description": "For every file: min_mapq, hide_duplicates, hide_secondary, hide_supplementary, hide_qc_fail, expression (\"\" clears).", "properties": {
@@ -2562,6 +2563,7 @@ warning: {}", w.join("; ")) },
         let target = self.resolve(&text, args)?;
         let width = uint_or(args, "width", 1000)?.clamp(300, 2400) as u32;
         let link = bool_arg(args, "link")?.unwrap_or(false);
+        let pairs = bool_arg(args, "pairs")?.unwrap_or(false);
         let sashimi = bool_arg(args, "sashimi")?.unwrap_or(false);
         let min_junction_reads = u32_or(args, "min_junction_reads", 2)?;
         let tag_of = |key: &str| -> Result<Option<[u8; 2]>> {
@@ -2611,10 +2613,10 @@ warning: {}", w.join("; ")) },
             let Ok(local) = bam.resolve_str(&format!("{}:{}-{}", region.contig, region.start + 1, region.end)) else { continue };
             let label = file_name(&path);
             let mut view = load_view(bam, &local, seq.clone(), label, &ViewOptions { filters: opts.clone(), bins: width as usize, max_rows: 40, tag, ..Default::default() })?;
-            if group != ggv_layout::GroupBy::None || link {
-                ggv_layout::repack(&mut view, 40, group, None, link);
+            if group != ggv_layout::GroupBy::None || link || pairs {
+                ggv_layout::repack(&mut view, 40, group, None, link, pairs);
             }
-            scenes.push(ggv_render::build_scene(&view, &ggv_render::RenderOptions { width, color_by, link, highlight: Some((target.start, target.end)), sashimi, min_junction_reads, ..Default::default() }));
+            scenes.push(ggv_render::build_scene(&view, &ggv_render::RenderOptions { width, color_by, link, pairs, highlight: Some((target.start, target.end)), sashimi, min_junction_reads, ..Default::default() }));
         }
         let png = crate::batch::stack(scenes).to_png(1.0).map_err(anyhow::Error::msg)?;
         Ok(Output::Image { png, note: format!("{}:{}-{} ({} bp), {}", region.contig, region.start + 1, region.end, region.len(), if target.len() == 1 { "the base outlined" } else { "as asked" }) })

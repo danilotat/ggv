@@ -48,6 +48,7 @@ pub struct Batch {
     /// The tag reads carry for colouring or grouping by it.
     pub tag: Option<[u8; 2]>,
     pub link: bool,
+    pub pairs: bool,
 }
 
 /// One place's results (or an unreadable line of the list), for the index and the TSV.
@@ -271,10 +272,10 @@ fn snapshot(b: &Batch, h: &mut Handles, ann: Option<&Annotation>, index: usize, 
             ggv_layout::GroupBy::BaseAt(_) => ggv_layout::GroupBy::None,
             g => g,
         };
-        if group != ggv_layout::GroupBy::None || b.link {
-            ggv_layout::repack(&mut view, b.max_rows, group, None, b.link);
+        if group != ggv_layout::GroupBy::None || b.link || b.pairs {
+            ggv_layout::repack(&mut view, b.max_rows, group, None, b.link, b.pairs);
         }
-        let opts = ggv_render::RenderOptions { width: b.width, color_by: b.color_by, link: b.link, highlight: Some((target.start, target.end)), ..Default::default() };
+        let opts = ggv_render::RenderOptions { width: b.width, color_by: b.color_by, link: b.link, pairs: b.pairs, highlight: Some((target.start, target.end)), ..Default::default() };
         scenes.push(ggv_render::build_scene(&view, &opts));
     }
     let png = stack(scenes).to_png(b.scale).map_err(anyhow::Error::msg)?;

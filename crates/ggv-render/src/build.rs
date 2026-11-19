@@ -34,6 +34,9 @@ pub struct RenderOptions {
     pub squish_above_rows: usize,
     /// Join the parts of split reads that share a row (pack with `link` to put them there).
     pub link: bool,
+    /// Join the mates of a pair that share a row with a line across the insert (pack with
+    /// `pairs` to put them there; IGV's "view as pairs").
+    pub pairs: bool,
     /// Draw splice junctions (RNA-seq) as a sashimi band under the coverage: an arc per
     /// intron with its read count, + strand above the line and − below.
     pub sashimi: bool,
@@ -50,6 +53,7 @@ impl Default for RenderOptions {
             coverage_height: 50.0,
             squish_above_rows: 40,
             link: false,
+            pairs: false,
             sashimi: false,
             min_junction_reads: 2,
         }
@@ -67,6 +71,8 @@ const READ_REV: Color = Color::rgb(160, 160, 230);
 const MAPQ0_OUTLINE: Color = Color::rgb(185, 185, 185);
 const COVERAGE: Color = Color::rgb(175, 175, 175);
 const LINK: Color = Color::rgb(70, 110, 200);
+/// The line across a pair's insert (IGV draws it grey).
+const PAIR_LINE: Color = Color::rgb(150, 150, 150);
 const COVERAGE_MAX: Color = Color::rgb(215, 215, 215);
 const DELETION: Color = Color::rgb(30, 30, 30);
 const REF_SKIP: Color = Color::rgb(150, 150, 150);
@@ -227,12 +233,17 @@ pub fn build_scene(view: &ViewData, opts: &RenderOptions) -> Scene {
                 for &i in row {
                     draw_read(&mut c, &reads[i], ry, row_h, expanded, opts.color_by, bounds);
                 }
-                if opts.link {
+                if opts.link || opts.pairs {
                     let mid = ry + row_h / 2.0;
                     for w in row.windows(2) {
                         let (a, b) = (&reads[w[0]], &reads[w[1]]);
-                        if ggv_layout::same_template(a, b) && b.start > a.end {
+                        if b.start <= a.end {
+                            continue;
+                        }
+                        if opts.link && ggv_layout::same_template(a, b) {
                             c.line(c.x(a.end), mid, c.x(b.start), mid, LINK, 1.0);
+                        } else if opts.pairs && ggv_layout::same_pair(a, b) {
+                            c.line(c.x(a.end), mid, c.x(b.start), mid, PAIR_LINE, 1.0);
                         }
                     }
                 }

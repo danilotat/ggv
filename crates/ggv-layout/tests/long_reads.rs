@@ -117,7 +117,7 @@ fn any_tag_groups_like_its_dedicated_grouping() {
     let opts = ViewOptions { tag: Some(*b"HP"), ..Default::default() };
     let view = load_view(&mut bam, &region, None, String::new(), &opts).unwrap();
     let (reads, _) = view.reads.as_ref().unwrap();
-    let pack = |group| ggv_layout::pack_with(reads, &ggv_layout::PackOptions { max_rows: 1000, min_gap: 2, group, sort: None, link: false, clips: false });
+    let pack = |group| ggv_layout::pack_with(reads, &ggv_layout::PackOptions { max_rows: 1000, min_gap: 2, group, sort: None, link: false, pairs: false, clips: false });
     let (by_tag, by_hp) = (pack(ggv_layout::GroupBy::Tag(*b"HP")), pack(ggv_layout::GroupBy::Haplotype));
     let counts = |p: &ggv_layout::Packed| p.groups.iter().map(|g| g.reads).collect::<Vec<_>>();
     assert_eq!(counts(&by_tag), counts(&by_hp));
@@ -142,7 +142,7 @@ fn rows_changed_after_pan(sticky: bool) -> (usize, usize) {
     };
     let (a, b) = (load(&mut bam, 58_811_000), load(&mut bam, 58_823_000));
     let (ra, rb) = (&a.reads.as_ref().unwrap().0, &b.reads.as_ref().unwrap().0);
-    let po = ggv_layout::PackOptions { max_rows: 10_000, min_gap: 2, group: ggv_layout::GroupBy::None, sort: None, link: false, clips: false };
+    let po = ggv_layout::PackOptions { max_rows: 10_000, min_gap: 2, group: ggv_layout::GroupBy::None, sort: None, link: false, pairs: false, clips: false };
     let pa = ggv_layout::pack_with(ra, &po);
     let pb = if sticky {
         ggv_layout::pack_sticky(rb, (0..rb.len()).collect(), &po, &ggv_layout::row_hints(ra, &pa))

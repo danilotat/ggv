@@ -69,6 +69,10 @@ pub struct PackOptions {
     /// Keep the parts of a split read (its primary and supplementary records, same name and
     /// mate) on one row, spanning from the first part to the last, grouped by the primary.
     pub link: bool,
+    /// Keep the two mates of a pair (their primary records) on one row, spanning the insert
+    /// between them, grouped by the leftmost (IGV's "view as pairs"). With `link`, a split
+    /// mate's supplementary parts join them.
+    pub pairs: bool,
     /// Soft clips are drawn: reads take their clipped bases' room too, so clips never cover
     /// a neighbour.
     pub clips: bool,
@@ -87,7 +91,7 @@ pub fn extent(r: &AlignedRead, clips: bool) -> (u64, u64) {
 /// Packs reads (in coordinate order, as a BAM query returns them) into at most `max_rows`
 /// rows, leaving at least `min_gap` bases between neighbours.
 pub fn pack(reads: &[AlignedRead], max_rows: usize, min_gap: u64) -> Packed {
-    pack_with(reads, &PackOptions { max_rows, min_gap, group: GroupBy::None, sort: None, link: false, clips: false })
+    pack_with(reads, &PackOptions { max_rows, min_gap, group: GroupBy::None, sort: None, link: false, pairs: false, clips: false })
 }
 
 /// Whether `a` and `b` are parts of one split read: same name, same mate (first / second).
@@ -95,23 +99,43 @@ pub fn same_template(a: &AlignedRead, b: &AlignedRead) -> bool {
     a.name == b.name && (a.flags & 0xC0) == (b.flags & 0xC0)
 }
 
+/// Whether `a` and `b` are records of the two mates of one pair: paired, same name, one the
+/// first mate and the other the second.
+pub fn same_pair(a: &AlignedRead, b: &AlignedRead) -> bool {
+    a.flags & b.flags & 0x1 != 0 && a.name == b.name && (a.flags & 0xC0) != (b.flags & 0xC0)
+}
+
+/// Which unit a read joins, if any: its name and a kind (a split read's mate bits, or `PAIR`
+/// for a whole pair). Mates join on their primary records only; secondary and supplementary
+/// records of a pair stay alone unless split reads are linked too.
+fn unit_key(r: &AlignedRead, link: bool, pairs: bool) -> Option<(&str, u16)> {
+    const PAIR: u16 = 0xFFFF;
+    let paired = r.flags & 0x1 != 0;
+    let split = link && (!r.supplementary.is_empty() || r.flags & 0x800 != 0);
+    if pairs && paired && (split || r.flags & 0x900 == 0) {
+        Some((r.name.as_str(), PAIR))
+    } else if split {
+        Some((r.name.as_str(), r.flags & 0xC0))
+    } else {
+        None
+    }
+}
+
 /// Units of reads to place together: each split read's parts (in start order, the primary
 /// first among equals), every other read alone. Leaders (the unit's primary, else its first
 /// part) decide the group.
-fn units(reads: &[AlignedRead], order: &[usize]) -> Vec<Vec<usize>> {
+fn units(reads: &[AlignedRead], order: &[usize], link: bool, pairs: bool) -> Vec<Vec<usize>> {
     let mut by_key: std::collections::HashMap<(&str, u16), usize> = std::collections::HashMap::new();
     let mut out: Vec<Vec<usize>> = Vec::new();
     for &i in order {
-        let r = &reads[i];
-        let split = !r.supplementary.is_empty() || r.flags & 0x800 != 0;
-        if !split {
+        let Some(key) = unit_key(&reads[i], link, pairs) else {
             out.push(vec![i]);
             continue;
-        }
-        match by_key.get(&(r.name.as_str(), r.flags & 0xC0)) {
+        };
+        match by_key.get(&key) {
             Some(&u) => out[u].push(i),
             None => {
-                by_key.insert((r.name.as_str(), r.flags & 0xC0), out.len());
+                by_key.insert(key, out.len());
                 out.push(vec![i]);
             }
         }
@@ -173,8 +197,9 @@ pub fn pack_indices(reads: &[AlignedRead], mut order: Vec<usize>, opts: &PackOpt
         }),
         None => group_key(&reads[i], opts.group),
     };
-    // With linking, whole split reads go to their primary's group.
-    let linked = opts.link.then(|| units(reads, &order));
+    // With linking, whole split reads go to their primary's group; with pairs, whole pairs
+    // to their leftmost mate's.
+    let linked = (opts.link || opts.pairs).then(|| units(reads, &order, opts.link, opts.pairs));
     let mut groups: Vec<(GroupKey, Vec<usize>)> = Vec::new();
     let mut unit_groups: Vec<(GroupKey, Vec<Vec<usize>>)> = Vec::new();
     match &linked {
@@ -452,6 +477,48 @@ mod tests {
     }
 
     #[test]
+    fn pairs_share_a_row_spanning_the_insert() {
+        let named = |name: &str, start, end, flags, hp| AlignedRead { name: name.into(), flags, haplotype: hp, ..read(start, end) };
+        // "p": mates at 0..10 (HP 1, first) and 50..60 (HP 2, second), with a supplementary
+        // part of the second mate at 80..90 and a secondary record at 100..110. "x" sits in
+        // the insert; "u" is unpaired; "q" has its mate outside the loaded reads.
+        let reads = vec![
+            named("p", 0, 10, 0x41, Some(1)),
+            named("x", 20, 30, 0x41, Some(1)),
+            named("p", 50, 60, 0x81, Some(2)),
+            named("p", 80, 90, 0x881, None),
+            named("p", 100, 110, 0x141, None),
+            named("u", 120, 130, 0, Some(1)),
+            named("q", 140, 150, 0x41, Some(1)),
+        ];
+        let row_of = |p: &Packed, i| p.rows.iter().position(|r| r.contains(&i)).unwrap();
+        let pairs = pack_with(&reads, &PackOptions { pairs: true, ..opts(GroupBy::None, None) });
+        assert_eq!(row_of(&pairs, 0), row_of(&pairs, 2), "mates on one row");
+        assert_ne!(row_of(&pairs, 1), row_of(&pairs, 0), "the insert is taken");
+        // Without linking, the supplementary and secondary records stay apart: here they fit
+        // after the pair on its row, but they aren't part of it (x's row is first-fit too).
+        assert_eq!(pairs.rows.iter().flatten().count(), reads.len());
+        assert!(same_pair(&reads[0], &reads[2]) && !same_pair(&reads[0], &reads[1]) && !same_pair(&reads[2], &reads[3]));
+        assert!(!same_pair(&reads[5], &reads[5]), "unpaired reads have no mate");
+
+        // Grouped: the pair follows its leftmost mate (HP 1), though its other mate is HP 2.
+        let grouped = pack_with(&reads, &PackOptions { pairs: true, ..opts(GroupBy::Haplotype, None) });
+        let hp1 = &grouped.groups[0];
+        assert_eq!(hp1.label, "HP 1");
+        assert!((hp1.first_row..hp1.first_row + hp1.rows).contains(&row_of(&grouped, 2)));
+
+        // With linking too, the supplementary part joins the pair; the secondary doesn't.
+        let both = pack_with(&reads, &PackOptions { pairs: true, link: true, ..opts(GroupBy::Haplotype, None) });
+        assert_eq!(row_of(&both, 0), row_of(&both, 3));
+        assert_eq!(both.groups.iter().map(|g| (g.label.as_str(), g.reads)).collect::<Vec<_>>(), [("HP 1", 6), ("no HP", 1)]);
+
+        // Off: mates pack apart (the second mate is HP 2).
+        let plain = pack_with(&reads, &opts(GroupBy::Haplotype, None));
+        assert_ne!(plain.groups.iter().position(|g| (g.first_row..g.first_row + g.rows).contains(&row_of(&plain, 0))),
+                   plain.groups.iter().position(|g| (g.first_row..g.first_row + g.rows).contains(&row_of(&plain, 2))));
+    }
+
+    #[test]
     fn caps_rows() {
         let reads: Vec<_> = (0..5).map(|_| read(0, 10)).collect();
         let p = pack(&reads, 3, 2);
@@ -460,7 +527,7 @@ mod tests {
     }
 
     fn opts(group: GroupBy, sort: Option<(u64, SortBy)>) -> PackOptions {
-        PackOptions { max_rows: 100, min_gap: 2, group, sort, link: false, clips: false }
+        PackOptions { max_rows: 100, min_gap: 2, group, sort, link: false, pairs: false, clips: false }
     }
 
     #[test]
@@ -529,9 +596,9 @@ mod tests {
 
 /// Re-packs a loaded view's reads with grouping and sorting (views load ungrouped), keeping
 /// the same row budget.
-pub fn repack(view: &mut crate::ViewData, max_rows: usize, group: GroupBy, sort: Option<(u64, SortBy)>, link: bool) {
+pub fn repack(view: &mut crate::ViewData, max_rows: usize, group: GroupBy, sort: Option<(u64, SortBy)>, link: bool, pairs: bool) {
     if let Some((reads, packed)) = &mut view.reads {
-        *packed = pack_with(reads, &PackOptions { max_rows, min_gap: 2, group, sort, link, clips: false });
+        *packed = pack_with(reads, &PackOptions { max_rows, min_gap: 2, group, sort, link, pairs, clips: false });
     }
 }
 
@@ -567,9 +634,9 @@ impl RowHints {
 /// [`pack_indices`] that keeps reads where `hints` had them: when a newly loaded span overlaps
 /// the last (panning), reads already on screen stay in their rows and the new ones fit around
 /// them, instead of the whole span repacking from its first read and reads jumping rows. Only
-/// for plain packings (grouping, sorting and linking order rows themselves).
+/// for plain packings (grouping, sorting, linking and pairs order rows themselves).
 pub fn pack_sticky(reads: &[AlignedRead], mut order: Vec<usize>, opts: &PackOptions, hints: &RowHints) -> Packed {
-    if hints.is_empty() || opts.group != GroupBy::None || opts.sort.is_some() || opts.link {
+    if hints.is_empty() || opts.group != GroupBy::None || opts.sort.is_some() || opts.link || opts.pairs {
         return pack_indices(reads, order, opts);
     }
     order.sort_by_key(|&i| extent(&reads[i], opts.clips));

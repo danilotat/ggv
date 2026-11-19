@@ -91,7 +91,8 @@ what was used and where it came from:
 Three more tools appear: `view` (each pane's view, outlined base, selection, files, filters and
 display options, and the other GGV windows), `navigate` (go to a locus, region or gene, or
 select a region, which opens its statistics in the Region window) and `display` (change the
-window's colouring, grouping, sort, soft clips, squished rows, transcripts and read filters, for
+window's colouring, grouping, sort, soft clips, squished rows, linked split reads, pairs
+(`view_pairs`), transcripts and read filters, for
 every file or one file's own expression, as the toolbar would; every value is checked before
 any is applied, and the reply's `before` restores the previous settings). `open` opens files in the
 window. Five more manage the window: `select` (select a region, or `clear`), `bookmarks` (list,

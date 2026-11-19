@@ -41,7 +41,7 @@ fn grouped_pictures_label_each_group() {
     let mut bam = ggv_io::BamFile::open(data.join("HG002.revio.slices.bam")).unwrap();
     let region = bam.resolve_str("chr20:31165000-31184000").unwrap();
     let mut view = load_view(&mut bam, &region, None, "HG002".into(), &ViewOptions::default()).unwrap();
-    ggv_layout::repack(&mut view, 100, ggv_layout::GroupBy::Haplotype, None, false);
+    ggv_layout::repack(&mut view, 100, ggv_layout::GroupBy::Haplotype, None, false, false);
     let svg = build_scene(&view, &RenderOptions::default()).to_svg();
     // 38 reads on each haplotype here (samtools agrees), the rest untagged.
     for label in ["HP 1 (38 reads)", "HP 2 (38 reads)", "no HP ("] {

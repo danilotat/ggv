@@ -36,6 +36,9 @@ pub struct Session {
     /// Split reads linked on one row.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub link_splits: bool,
+    /// Pairs' mates on one row, joined across the insert.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub view_pairs: bool,
     pub squished: bool,
     /// Splice-junction arcs over the coverage.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -200,6 +203,7 @@ impl Session {
             sort: self.sort.as_ref().and_then(|s| Some((s.pos.checked_sub(1)?, parse_sort(&s.by)?))),
             soft_clips: self.soft_clips,
             link_splits: self.link_splits,
+            view_pairs: self.view_pairs,
             squished: self.squished,
             junctions: self.junctions,
             detail: Default::default(),
@@ -231,6 +235,7 @@ impl Session {
         self.sort = style.sort.map(|(pos, by)| SortState { pos: pos + 1, by: sort_name(by).to_owned() });
         self.soft_clips = style.soft_clips;
         self.link_splits = style.link_splits;
+        self.view_pairs = style.view_pairs;
         self.squished = style.squished;
         self.junctions = style.junctions;
         self.coverage_scale = match style.coverage_scale {
@@ -417,6 +422,7 @@ mod tests {
             sort: Some((43_092_918, SortBy::MappingQuality)),
             soft_clips: true,
             link_splits: true,
+            view_pairs: true,
             squished: false,
             junctions: true,
             detail: Default::default(),

@@ -123,6 +123,7 @@ fn batch_vcfs(d: &Dir, list: &str, list_name: &str, bams: &[&Path], reference: O
         group: ggv_layout::GroupBy::None,
         tag: None,
         link: false,
+        pairs: false,
     };
     let outcome = batch::run(&b).unwrap();
     (outcome, std::fs::read_to_string(out.join("summary.tsv")).unwrap())
@@ -571,4 +572,46 @@ fn index_builds_what_a_query_then_needs_and_other_files_are_not_bams() {
     let fa = fasta(&d, "ref.fa", &[("chrQ", &r)]);
     let e = run(&["ggv", "info", &fa.display().to_string()]).unwrap_err();
     assert!(e.contains("not a BAM file (it is named as a reference sequence)"), "{e}");
+}
+
+/// View as pairs on a paired-end BAM: each pair's mates share a row and a grey line crosses the
+/// insert; a mate whose partner isn't loaded, an unpaired read and pairs off draw no line.
+#[test]
+fn pairs_share_a_row_joined_across_the_insert() {
+    let d = Dir::new("pairs");
+    let seq = bases(2000);
+    // SAM line for a mate: flags, 1-based position, mate position, TLEN.
+    let mate = |name: &str, flags: u16, pos: usize, mpos: usize, tlen: i64| {
+        format!("{name}\t{flags}\tchrP\t{pos}\t60\t40M\t=\t{mpos}\t{tlen}\t{}\t{}", &seq[pos - 1..pos + 39], "I".repeat(40))
+    };
+    let reads = vec![
+        mate("a", 99, 101, 401, 340),
+        mate("a", 147, 401, 101, -340),
+        mate("b", 99, 121, 421, 340),
+        mate("b", 147, 421, 121, -340),
+        // Mate far outside the region drawn.
+        mate("c", 99, 141, 1801, 1700),
+        read("u", "chrP", 161, "40M", &seq[160..200]),
+    ];
+    let p = bam(&d, "pairs.bam", &[("chrP", 2000)], &reads);
+    let mut file = ggv_io::BamFile::open(&p).unwrap();
+    let region = file.resolve_str("chrP:1-1000").unwrap();
+    let load = |file: &mut ggv_io::BamFile| ggv_layout::load_view(file, &region, None, "s".into(), &ggv_layout::ViewOptions::default()).unwrap();
+
+    let mut view = load(&mut file);
+    ggv_layout::repack(&mut view, 50, ggv_layout::GroupBy::None, None, false, true);
+    let (reads, packed) = view.reads.as_ref().unwrap();
+    let row_of = |name: &str, flags: u16| {
+        let i = reads.iter().position(|r| r.name == name && r.flags == flags).unwrap();
+        packed.rows.iter().position(|row| row.contains(&i)).unwrap()
+    };
+    assert_eq!(row_of("a", 99), row_of("a", 147));
+    assert_eq!(row_of("b", 99), row_of("b", 147));
+    assert_ne!(row_of("a", 99), row_of("b", 99), "a pair's insert is taken");
+    const PAIR_LINE: &str = "rgb(150,150,150)";
+    let svg = ggv_render::build_scene(&view, &ggv_render::RenderOptions { pairs: true, ..Default::default() }).to_svg();
+    assert_eq!(svg.matches(PAIR_LINE).count(), 2, "one line per pair with both mates loaded");
+
+    let plain = load(&mut file);
+    assert!(!ggv_render::build_scene(&plain, &ggv_render::RenderOptions::default()).to_svg().contains(PAIR_LINE));
 }

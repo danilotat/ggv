@@ -136,6 +136,8 @@ pub struct Style {
     pub soft_clips: bool,
     /// Split reads' parts on one row, joined (IGV's "link supplementary alignments").
     pub link_splits: bool,
+    /// Each pair's mates on one row, joined across the insert (IGV's "view as pairs").
+    pub view_pairs: bool,
     /// What the zoom can show (set from the view, not saved): instances that can't show at it
     /// aren't built, and changing band rebuilds from the loaded data.
     pub detail: Detail,
@@ -194,7 +196,7 @@ impl Style {
     }
 
     pub fn pack_options(&self) -> PackOptions {
-        PackOptions { max_rows: 10_000, min_gap: 2, group: self.group, sort: self.sort, link: self.link_splits, clips: self.soft_clips }
+        PackOptions { max_rows: 10_000, min_gap: 2, group: self.group, sort: self.sort, link: self.link_splits, pairs: self.view_pairs, clips: self.soft_clips }
     }
 }
 
@@ -429,13 +431,20 @@ pub fn build(view: &ViewData, coverage: &Coverage, packed: &Packed, style: Style
             for &i in row {
                 read(&mut b, &reads[i], y, rl.row_h, style, sizes.as_ref(), coarse.as_ref());
             }
-            // Linked split reads: a thin line from each part to the next.
-            if style.link_splits {
+            // Linked split reads: a thin blue line from each part to the next; pairs: a grey
+            // one across the insert, as IGV draws it.
+            if style.link_splits || style.view_pairs {
                 let mid = y + rl.row_h / 2.0;
+                let pair_line = if style.dark { rgba(120, 120, 120, 255) } else { rgba(150, 150, 150, 255) };
                 for w in row.windows(2) {
                     let (a, c) = (&reads[w[0]], &reads[w[1]]);
-                    if ggv_layout::same_template(a, c) && c.start > a.end {
+                    if c.start <= a.end {
+                        continue;
+                    }
+                    if style.link_splits && ggv_layout::same_template(a, c) {
                         b.push(a.end, c.start, mid - 0.5, mid + 0.5, rgba(70, 110, 200, 255), FLAG_SCROLL, ALWAYS);
+                    } else if style.view_pairs && ggv_layout::same_pair(a, c) {
+                        b.push(a.end, c.start, mid - 0.5, mid + 0.5, pair_line, FLAG_SCROLL, ALWAYS);
                     }
                 }
             }
