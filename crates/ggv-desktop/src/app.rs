@@ -3329,9 +3329,11 @@ impl App {
         let rl = tracks::row_layout(&cur.packed, cur.style);
         let row = cur.packed.rows.get((y / rl.pitch) as usize)?;
         let base = (vs + f64::from(pos.x - section.left()) / self.ppb).floor().max(0.0) as u64;
-        let k = row.partition_point(|&i| reads[i].end <= base);
+        // Shown soft clips are part of the read (packing gives them room).
+        let ext = |r: &AlignedRead| ggv_layout::extent(r, cur.style.soft_clips);
+        let k = row.partition_point(|&i| ext(&reads[i]).1 <= base);
         let r = &reads[*row.get(k)?];
-        (r.start <= base).then_some(r)
+        (ext(r).0 <= base).then_some(r)
     }
 
     /// Right-click menu (IGV-style): sort at the clicked base, group, colour, copy.
