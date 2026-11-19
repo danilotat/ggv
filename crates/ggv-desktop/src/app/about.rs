@@ -103,13 +103,9 @@ impl App {
         }
         let mut open = true;
         let mut copy = false;
-        egui::Window::new("About GGV")
-            .id(egui::Id::unique(("about", self.reference_slot)))
-            .collapsible(false)
-            .resizable(true)
+        super::tool_window::ToolWindow::new("About GGV", egui::Id::unique(("about", self.reference_slot)))
             .default_width(520.0)
-            .open(&mut open)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 ui.label(RichText::new(build_line()).strong());
                 ui.label("A fast genome viewer for people and agents. MIT licensed.");
                 ui.add_space(6.0);

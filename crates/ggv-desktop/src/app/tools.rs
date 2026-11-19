@@ -656,12 +656,10 @@ impl App {
         let mut add = false;
         let mut export = false;
         let edit = self.edit_bookmark.take();
-        egui::Window::new("Bookmarks")
-            .id(egui::Id::unique(("bookmarks", self.reference_slot)))
-            .open(&mut open)
-            .default_pos(Pos2::new(ctx.content_rect().right() - 380.0, 90.0))
+        super::tool_window::ToolWindow::new("Bookmarks", egui::Id::unique(("bookmarks", self.reference_slot)))
+            .at(Pos2::new(ctx.content_rect().right() - 380.0, 90.0), Align2::LEFT_TOP)
             .default_width(340.0)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 let mut list = self.bookmarks.borrow_mut();
                 if list.is_empty() {
                     ui.label("No bookmarks yet. Ctrl+D bookmarks the selection, the outlined base, or the view.");
@@ -777,12 +775,10 @@ impl App {
         }
         let mut open = true;
         let mut start = false;
-        egui::Window::new("Review queue: paste places")
-            .id(egui::Id::unique(("paste-queue", self.reference_slot)))
-            .open(&mut open)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .collapsible(false)
-            .show(ctx, |ui| {
+        super::tool_window::ToolWindow::new("Review queue: paste places", egui::Id::unique(("paste-queue", self.reference_slot)))
+            .anchored(Align2::CENTER_CENTER, Vec2::ZERO)
+            .default_width(460.0)
+            .show(ctx, &mut open, |ui| {
                 ui.label("One per line: chr1:100-200, chr1:12345, BED (chr1 99 200 name) or VCF lines. Text after a locus is its label.");
                 let edit = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(12).desired_width(460.0).font(egui::TextStyle::Monospace));
                 // Typing goes into the box when the window opens, not to the tracks as shortcuts.
@@ -814,12 +810,10 @@ impl App {
         }
         let mut open = true;
         let mut submit = false;
-        egui::Window::new("Open a URL")
-            .id(egui::Id::unique(("open-url", self.reference_slot)))
-            .open(&mut open)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .collapsible(false)
-            .show(ctx, |ui| {
+        super::tool_window::ToolWindow::new("Open a URL", egui::Id::unique(("open-url", self.reference_slot)))
+            .anchored(Align2::CENTER_CENTER, Vec2::ZERO)
+            .default_width(520.0)
+            .show(ctx, &mut open, |ui| {
                 ui.label("BAM, CRAM, FASTA, 2bit, bigWig or annotation at an https://, s3:// or gs:// address (public or presigned). Only the parts you look at are fetched.");
                 ui.add_space(4.0);
                 ui.label("File URL");
@@ -1032,12 +1026,10 @@ impl App {
             None => "Filter reads (all tracks)".to_owned(),
         };
         let saved = self.saved_filters.clone();
-        egui::Window::new(title)
-            .id(egui::Id::unique(("filter", self.reference_slot)))
-            .open(&mut open)
-            .default_pos(Pos2::new(ctx.content_rect().center().x - 260.0, 90.0))
+        super::tool_window::ToolWindow::new(&title, egui::Id::unique(("filter", self.reference_slot)))
+            .at(Pos2::new(ctx.content_rect().center().x - 260.0, 90.0), Align2::LEFT_TOP)
             .default_width(520.0)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut f.text)
                         .hint_text("mapq >= 20 && hp == 1 && !dup")
@@ -1150,10 +1142,10 @@ impl App {
         let mut copy = None;
         // Off to the side of the pane: what is found is centred in the view.
         let spot = self.centre_window_pos(ctx, 200.0);
-        super::inspector::placed(ctx, egui::Window::new("Find read by name"), egui::Id::unique(("find-read", self.reference_slot)), spot, self.pane_settled())
-            .open(&mut open)
+        super::tool_window::ToolWindow::new("Find read by name", egui::Id::unique(("find-read", self.reference_slot)))
+            .placed(spot, self.pane_settled())
             .default_width(460.0)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 let edit = ui.add(egui::TextEdit::singleline(&mut f.text).hint_text("read name").desired_width(f32::INFINITY).font(egui::TextStyle::Monospace));
                 if !f.focused {
                     edit.request_focus();
@@ -1658,11 +1650,11 @@ impl App {
         let (spot, settled) = (self.centre_window_pos(ctx, 220.0), self.pane_settled());
         let c = self.compare.as_mut().expect("checked");
         let picked = (c.a, c.b);
-        super::inspector::placed(ctx, egui::Window::new("Compare tracks"), egui::Id::unique(("compare", self.reference_slot)), spot, settled)
-            .open(&mut open)
+        super::tool_window::ToolWindow::new("Compare tracks", egui::Id::unique(("compare", self.reference_slot)))
             // Over its own pane, clear of the view centre (placed above); it can be dragged.
+            .placed(spot, settled)
             .resizable(false)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 egui::Grid::new(("compare-grid", c.a)).num_columns(2).show(ui, |ui| {
                     for (label, which) in [("A", &mut c.a), ("B", &mut c.b)] {
                         ui.label(label);

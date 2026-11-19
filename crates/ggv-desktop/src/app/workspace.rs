@@ -196,7 +196,7 @@ impl App {
         let mut locate = None;
         let mut folder = false;
         let mut close = false;
-        egui::Window::new("Files not found").id(egui::Id::unique(("missing", self.reference_slot))).collapsible(false).show(ctx, |ui| {
+        super::tool_window::ToolWindow::new("Files not found", egui::Id::unique(("missing", self.reference_slot))).no_close().default_width(480.0).show(ctx, &mut true, |ui| {
             ui.label(if opened {
                 "These files aren't there (moved, renamed or deleted?). Locate one and GGV looks for the others in the same folder."
             } else {

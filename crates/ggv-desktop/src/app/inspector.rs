@@ -433,13 +433,14 @@ impl App {
             // Narrower in a narrower pane (a split), to fit beside the base at its centre.
             let width = (self.pane_rect(ctx).width() / 2.0 - 40.0).clamp(260.0, FLOAT_WIDTH);
             let mut open = true;
-            placed(ctx, egui::Window::new(s.title()), egui::Id::unique((s.title(), self.reference_slot)), self.window_pos(ctx, 300.0), self.pane_settled())
+            super::tool_window::ToolWindow::new(s.title(), egui::Id::unique((s.title(), self.reference_slot)))
                 // First shown over this pane's tracks on the side away from the outlined base (or
                 // the view centre), so it doesn't hide the reads it counts; then wherever it was
                 // dragged.
+                .placed(self.window_pos(ctx, 300.0), self.pane_settled())
                 .default_width(width)
-                .open(&mut open)
-                .show(ctx, |ui| {
+                .min_width(260.0)
+                .show(ctx, &mut open, |ui| {
                     self.section_header(s, ui, false);
                     ui.separator();
                     egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.7).show(ui, |ui| self.section_body(s, ui));

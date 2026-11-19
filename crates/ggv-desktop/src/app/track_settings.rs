@@ -74,12 +74,11 @@ impl App {
         let mut style = self.style;
         let collapsed = self.arrangement.collapsed.contains(&key);
         let spot = self.window_pos(ctx, 320.0);
-        super::inspector::placed(ctx, egui::Window::new("Track settings"), egui::Id::unique(("track-settings", self.reference_slot)), spot, self.pane_settled())
-            .open(&mut open)
-            .collapsible(false)
+        super::tool_window::ToolWindow::new("Track settings", egui::Id::unique(("track-settings", self.reference_slot)))
+            .placed(spot, self.pane_settled())
             .resizable(false)
             .default_width(300.0)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 ui.set_width(300.0);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let p = theme::palette(ui);
@@ -179,10 +178,10 @@ impl App {
         let mut copy = None;
         let mut go: Option<(String, u64)> = None;
         let spot = self.window_pos(ctx, 260.0);
-        super::inspector::placed(ctx, egui::Window::new("Read details"), egui::Id::unique(("read-details", self.reference_slot)), spot, self.pane_settled())
-            .open(&mut open)
+        super::tool_window::ToolWindow::new("Read details", egui::Id::unique(("read-details", self.reference_slot)))
+            .placed(spot, self.pane_settled())
             .default_width(420.0)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 for l in &lines {
                     ui.add(egui::Label::new(egui::RichText::new(l).monospace()).wrap());
                 }

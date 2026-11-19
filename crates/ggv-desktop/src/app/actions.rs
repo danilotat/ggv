@@ -472,16 +472,11 @@ impl App {
         let screen = ctx.content_rect();
         let (default, max) = shortcuts_size(screen.size());
         let mut open = true;
-        egui::Window::new("Keyboard shortcuts")
-            .id(egui::Id::unique(("shortcuts", self.reference_slot)))
-            .open(&mut open)
-            .pivot(Align2::CENTER_CENTER)
-            .default_pos(screen.center())
+        super::tool_window::ToolWindow::new("Keyboard shortcuts", egui::Id::unique(("shortcuts", self.reference_slot)))
+            .at(screen.center(), Align2::CENTER_CENTER)
             .default_size(default)
             .max_size(max)
-            .collapsible(false)
-            .resizable(true)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 ui.add(egui::Label::new(egui::RichText::new("Everything else is in the command palette (Ctrl+K).").weak()).wrap());
                 ui.separator();
                 super::inspector::visible_scroll_bars(ui);

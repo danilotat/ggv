@@ -141,10 +141,10 @@ impl App {
         let mut open = true;
         let mut copy = false;
         let id = self.variant_window_id();
-        super::inspector::placed(ctx, egui::Window::new(title), id, spot, self.pane_settled())
-            .open(&mut open)
+        super::tool_window::ToolWindow::new(&title, id)
+            .placed(spot, self.pane_settled())
             .default_width(460.0)
-            .show(ctx, |ui| {
+            .show(ctx, &mut open, |ui| {
                 ui.label(egui::RichText::new(&p.file).weak());
                 let short = |s: &str| if s.chars().count() > 60 { format!("{}… ({} bp)", s.chars().take(60).collect::<String>(), s.len()) } else { s.to_owned() };
                 ui.monospace(format!("{} > {}", short(&var.reference), short(&var.alts.join(","))));

@@ -221,7 +221,7 @@ impl App {
         }
         let mut open = true;
         let conflicts = self.assembly_conflicts();
-        egui::Window::new("Assembly and reference").id(egui::Id::unique(("assembly", self.reference_slot))).open(&mut open).default_width(560.0).show(ctx, |ui| {
+        super::tool_window::ToolWindow::new("Assembly and reference", egui::Id::unique(("assembly", self.reference_slot))).default_width(560.0).show(ctx, &mut open, |ui| {
             if conflicts.is_empty() {
                 ui.label("No disagreements found between the open files.");
                 ui.label(

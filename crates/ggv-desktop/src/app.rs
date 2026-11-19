@@ -918,12 +918,11 @@ impl App {
 
         let mut start = Vec::new();
         let mut dismiss = Vec::new();
-        egui::Window::new("Missing indexes")
-            .id(egui::Id::unique(("missing-indexes", self.reference_slot)))
-            .collapsible(false)
+        tool_window::ToolWindow::new("Missing indexes", egui::Id::unique(("missing-indexes", self.reference_slot)))
+            .anchored(Align2::CENTER_CENTER, Vec2::ZERO)
             .resizable(false)
-            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
+            .no_close()
+            .show(ctx, &mut true, |ui| {
             ui.label("These files have no index, which GGV needs for fast region queries.");
             ui.label("Building one reads the whole file once (large BAMs take a few minutes).");
             ui.separator();
