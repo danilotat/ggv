@@ -6,7 +6,6 @@ use std::{
     path::PathBuf,
     sync::{Arc, mpsc},
     thread,
-    time::{Duration, Instant},
 };
 
 use eframe::egui;
@@ -195,7 +194,7 @@ enum Request {
 }
 
 enum Reply {
-    Loaded { id: u64, region: Region, variants: Arc<Vec<Variant>>, packed: Packed, instances: Arc<Vec<Instance>>, color: SiteColor, sv: Arc<Vec<Option<(&'static str, Option<u64>)>>>, legend: Vec<(String, [u8; 3])>, dark: bool, elapsed: Duration },
+    Loaded { id: u64, region: Region, variants: Arc<Vec<Variant>>, packed: Packed, instances: Arc<Vec<Instance>>, color: SiteColor, sv: Arc<Vec<Option<(&'static str, Option<u64>)>>>, legend: Vec<(String, [u8; 3])>, dark: bool },
     Found { id: u64, hit: Option<(String, u64, u64)> },
     Failed(String),
 }
@@ -212,7 +211,6 @@ pub struct Loaded {
     /// What the instances were coloured by, and for which theme.
     color: SiteColor,
     dark: bool,
-    pub elapsed: Duration,
     /// Each variant's structural type and size (`Variant::structural`), worked out once per
     /// load rather than every frame.
     pub sv: Arc<Vec<Option<(&'static str, Option<u64>)>>>,
@@ -267,14 +265,13 @@ impl VariantTrack {
                 }
                 let reply = match req {
                     Request::Load { id, region, color, dark } => {
-                        let t = Instant::now();
                         match file.query(&region, false) {
                             Ok(v) => {
                                 let packed = pack(&v);
                                 let instances = Arc::new(build(&v, &packed, n, region.start, &color, dark));
                                 let sv = Arc::new(v.iter().map(|x| x.structural(50)).collect());
                                 let legend = legend_of(&color, &v, dark);
-                                Reply::Loaded { id, region, variants: Arc::new(v), packed, instances, color, sv, legend, dark, elapsed: t.elapsed() }
+                                Reply::Loaded { id, region, variants: Arc::new(v), packed, instances, color, sv, legend, dark }
                             }
                             Err(e) => Reply::Failed(e.to_string()),
                         }
@@ -364,7 +361,7 @@ impl VariantTrack {
         let mut found = None;
         for reply in self.rx.try_iter().collect::<Vec<_>>() {
             match reply {
-                Reply::Loaded { id, region, variants, packed, instances, color, sv, legend, dark, elapsed } => {
+                Reply::Loaded { id, region, variants, packed, instances, color, sv, legend, dark } => {
                     if self.requested.as_ref().is_some_and(|(r, _)| *r == id) {
                         self.requested = None;
                     }
@@ -378,7 +375,6 @@ impl VariantTrack {
                         instances: InstanceSet { generation: *generation, instances },
                         color,
                         dark,
-                        elapsed,
                         sv,
                         legend,
                     });
@@ -714,10 +710,10 @@ mod tests {
         let mut next = 1;
         let mut generation = 0;
         t.ensure_loaded("chr20", 64_444_167, 31_165_000.0, 31_184_000.0, &mut next);
-        let start = Instant::now();
-        while t.current.is_none() && start.elapsed() < Duration::from_secs(30) {
+        let start = std::time::Instant::now();
+        while t.current.is_none() && start.elapsed() < std::time::Duration::from_secs(30) {
             t.receive(&mut generation);
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let colours = |t: &VariantTrack| t.current.as_ref().unwrap().instances.instances.iter().map(|i| i.color).collect::<std::collections::HashSet<u32>>();
         let light = colours(&t);

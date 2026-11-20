@@ -402,7 +402,7 @@ fn batch_genome_fetches_only_what_f_and_g_leave_out() {
             _ => unreachable!(),
         }
     };
-    let local = || ggv_io::genomes::Local { reference: "cache/hg38.2bit".into(), genes: "cache/hg38.gtf.gz".into() };
+    let local = || ggv_io::genomes::Local { reference: "cache/hg38.2bit".into(), genes: "cache/hg38.gtf.gz".into(), cytobands: "cache/hg38.cytoBand.txt.gz".into() };
     let mut both = args(&["-f", "my.fa", "-g", "my.gtf"]);
     crate::batch_genome(&mut both, |_| panic!("fetched a genome -f and -g replace")).unwrap();
     assert_eq!((both.reference.unwrap(), both.genes.unwrap()), ("my.fa".into(), "my.gtf".into()));

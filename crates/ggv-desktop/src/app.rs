@@ -10,6 +10,8 @@ mod demo;
 mod dialogs;
 mod genome;
 mod inspector;
+mod locus_search;
+mod overview;
 mod palette;
 mod tool_window;
 mod tools;
@@ -84,6 +86,16 @@ fn sv_size(bp: u64) -> String {
         0..1000 => format!("{bp} bp"),
         1000..1_000_000 => format!("{:.1} kb", bp as f64 / 1000.0),
         _ => format!("{:.1} Mb", bp as f64 / 1e6),
+    }
+}
+
+/// The width of the view for the ruler: "250 bp", "31.4 kb", "250 kb", "1.2 Mb".
+fn span_text(bp: f64) -> String {
+    let unit = |v: f64, u: &str| if v < 99.95 { format!("{v:.1} {u}") } else { format!("{v:.0} {u}") };
+    match bp.round() {
+        b if b < 1000.0 => format!("{b} bp"),
+        b if b < 999_950.0 => unit(b / 1e3, "kb"),
+        b => unit(b / 1e6, "Mb"),
     }
 }
 
@@ -249,6 +261,8 @@ pub struct App {
     menu_track: Option<arrange::Key>,
     /// The track whose settings panel is open.
     track_settings: Option<arrange::Key>,
+    /// The track settings' name and colour fields while open (see `track_settings::LookDraft`).
+    look_draft: Option<track_settings::LookDraft>,
     /// The read whose details window is open.
     read_details: Option<track_settings::ReadDetails>,
     /// The clicked read's name: every alignment with it is outlined (mate, split parts).
@@ -261,6 +275,12 @@ pub struct App {
     /// A drag on the ruler or reference row in progress: the base it started on and the base
     /// under the pointer. Zooms to what it marks on release.
     zoom_drag: Option<(u64, u64)>,
+    /// Esc ended a ruler drag: the rest of it (until the button is let go) neither zooms nor pans.
+    zoom_drag_cancelled: bool,
+    /// The chromosome overview strip above the ruler.
+    overview: overview::Overview,
+    /// Gene-name suggestions under the locus box.
+    locus_search: locus_search::LocusSearch,
     /// A sort requested on the command line, applied at the first outlined base.
     pending_sort: Option<ggv_layout::SortBy>,
     /// An outlined base from a session, applied once the genome is known.
@@ -507,12 +527,16 @@ impl App {
             ctx_menu: None,
             menu_track: None,
             track_settings: None,
+            look_draft: None,
             read_details: None,
             selected_read: args.select_read.clone(),
             variant_popup: None,
             selection: None,
             selecting: false,
             zoom_drag: None,
+            zoom_drag_cancelled: false,
+            overview: overview::Overview::default(),
+            locus_search: locus_search::LocusSearch::default(),
             pending_sort: args.sort,
             pending_highlight: args.highlight.clone(),
             cycle_start: None,
@@ -1257,11 +1281,12 @@ impl App {
 
         // Exact pileup per alignment track.
         let mut copy: Option<String> = None;
-        for t in &self.tracks {
+        for (i, t) in self.tracks.iter().enumerate() {
             ui.separator();
+            let title = self.alignment_title(i);
             ui.horizontal(|ui| {
                 let name = ui
-                    .add(egui::Label::new(egui::RichText::new(t.title()).strong()).sense(egui::Sense::click()))
+                    .add(egui::Label::new(egui::RichText::new(title).strong()).sense(egui::Sense::click()))
                     .on_hover_text(format!("{}\nsample: {}\n{}\nclick to copy", t.file_name(), t.label(), t.loader.bam_path.display()));
                 if name.clicked() {
                     copy = Some(t.full_title());
@@ -1374,7 +1399,8 @@ impl App {
         let tracks: Vec<(String, Option<(u64, Option<Result<ggv_query::RegionSummary, String>>)>)> = self
             .tracks
             .iter()
-            .map(|t| (t.title(), t.summary.clone()))
+            .enumerate()
+            .map(|(i, t)| (self.alignment_title(i), t.summary.clone()))
             .collect();
         ui.label(egui::RichText::new(format!("{contig}:{}-{}  ({} bp)", commas(start + 1), commas(end), commas(end - start))).strong());
         // The selected bases: the reference's, or each sample's own (from its reads).
@@ -1472,7 +1498,12 @@ impl App {
         if self.contigs.is_empty() {
             return;
         }
-        let here = (self.contig, self.center, self.ppb);
+        self.remember((self.contig, self.center, self.ppb));
+    }
+
+    /// Records `here` (contig, centre, points per base) for Back: where a drag started, once it
+    /// has ended somewhere else.
+    fn remember(&mut self, here: (usize, f64, f64)) {
         let same = |p: &(usize, f64, f64)| p.0 == here.0 && (p.1 - here.1).abs() < 1.0 && (p.2 / here.2 - 1.0).abs() < 1e-6;
         if !self.back.last().is_some_and(same) {
             self.back.push(here);
@@ -1509,13 +1540,16 @@ impl App {
         if let Some(reference) = sorted.reference {
             self.set_reference(reference, ctx);
         }
+        if let Some(bands) = sorted.cytobands {
+            self.open_cytobands(bands);
+        }
         self.add_tracks(sorted.bams, ctx);
         self.add_variants(sorted.vcfs, ctx);
         self.add_genes(sorted.genes, ctx);
         self.add_signals(sorted.signals, ctx);
         if !sorted.unknown.is_empty() {
             let names: Vec<String> = sorted.unknown.iter().map(|p| crate::files::display_name(p)).collect();
-            self.error = Some(format!("Not a BAM/CRAM, VCF/BCF, GTF/GFF/BED, FASTA, bigWig/bedGraph/SEG or session: {}", names.join(", ")));
+            self.error = Some(format!("Not a BAM/CRAM, VCF/BCF, GTF/GFF/BED, FASTA, bigWig/bedGraph/SEG, cytoband table or session: {}", names.join(", ")));
         }
         let known: Vec<PathBuf> = paths.into_iter().filter(|p| ggv_io::remote::is_present(p) && crate::files::kind_of(&p.to_string_lossy()).is_some()).collect();
         crate::files::remember(&mut self.recent, &known);
@@ -1783,6 +1817,20 @@ impl App {
     /// naming no build, and those naming another build last. With an hg38 and an hg19 annotation
     /// both open on hg19 data, a gene went to the first one opened (GRCh38 coordinates).
     fn gene_hits(&self, text: &str) -> Vec<(usize, Region)> {
+        self.gene_spans(text).into_iter().map(|(i, r)| (i, self.pad_gene(r))).collect()
+    }
+
+    /// A gene's extent with room around it to jump to: 10% of its length on each side (at
+    /// least 50 bases), within the contig.
+    fn pad_gene(&self, r: Region) -> Region {
+        let len = self.contigs.iter().find(|c| c.name == r.contig).map_or(u64::MAX, |c| c.length);
+        let pad = (r.len() / 10).max(50);
+        Region { start: r.start.saturating_sub(pad), end: (r.end + pad).min(len), contig: r.contig }
+    }
+
+    /// Where gene `text` is (its whole extent) in each open annotation, best first; see
+    /// [`Self::gene_hits`].
+    fn gene_spans(&self, text: &str) -> Vec<(usize, Region)> {
         let build = self.build();
         let mut hits: Vec<(u8, usize, Region)> = Vec::new();
         for (i, g) in self.genes.iter().enumerate() {
@@ -1791,8 +1839,7 @@ impl App {
             let Some(contig) = self.contigs.iter().find(|c| c.name == span.contig || aliases.contains(&c.name)) else {
                 continue;
             };
-            let pad = ((span.end - span.start) / 20).max(50);
-            let region = Region { contig: contig.name.clone(), start: span.start.saturating_sub(pad), end: (span.end + pad).min(contig.length) };
+            let region = Region { contig: contig.name.clone(), start: span.start, end: span.end.min(contig.length) };
             let rank = match (build, annotation_build(&g.path)) {
                 (Some(b), Some(a)) if a == b => 0,
                 (_, None) => 1,
@@ -2557,6 +2604,9 @@ impl App {
 
             // Genomic coordinates: the locus box leads, a search field with its icon inside.
             let locus_w = fit.locus_w;
+            // Monospace: Figtree's digits are proportional, so coordinates would jitter as they
+            // change (see fonts.rs).
+            self.locus_keys(ui);
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.locus_text).id_salt("locus")
                     .desired_width(locus_w)
@@ -2578,8 +2628,18 @@ impl App {
                 }
             }
             let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (fit.go && theme::primary(ui, "Go").on_hover_text("Go to the locus or gene (Enter)").clicked()) || submitted {
+            // A gene chosen from the suggestions (or typed whole) goes there with room around it;
+            // anything else goes to the locus parser as typed.
+            // (Enter first: the box has just lost focus, which closes the suggestions.)
+            let entered_gene = if submitted { self.locus_choice(&self.locus_text) } else { None };
+            let clicked_gene = self.locus_suggestions(ui, &edit);
+            if let Some(region) = clicked_gene.or(entered_gene) {
+                self.pending_goto = Some(region.to_string());
+                self.close_locus_suggestions();
+                ui.memory_mut(|m| m.surrender_focus(edit.id));
+            } else if (fit.go && theme::primary(ui, "Go").on_hover_text("Go to the locus or gene (Enter)").clicked()) || submitted {
                 self.pending_goto = Some(self.locus_text.clone());
+                self.close_locus_suggestions();
             }
             if !edit.has_focus()
                 && self.pending_goto.is_none()
@@ -3039,9 +3099,9 @@ impl App {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        self.width = rect.width().max(1.0);
-        self.canvas_rect = rect;
+        let (full, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        self.width = full.width().max(1.0);
+        self.canvas_rect = full;
         let ppp = ui.ctx().pixels_per_point();
         self.poll_genes();
         self.poll_signals();
@@ -3061,13 +3121,18 @@ impl App {
             self.highlight = Some((c, r.start));
         }
         if self.contigs.is_empty() {
-            self.welcome(ui, rect);
+            self.welcome(ui, full);
             if let Some(hint) = self.no_genome_hint() {
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, hint, FontId::proportional(13.0), self.pal().muted);
+                ui.painter().text(full.center(), Align2::CENTER_CENTER, hint, FontId::proportional(13.0), self.pal().muted);
             }
             return;
         }
 
+        // The chromosome overview on top (its own widget, over the canvas's, so it takes the
+        // pointer there); the ruler, reference and tracks in what is left below it.
+        let (strip, rect) = Self::split_overview(full);
+        let strip_response = ui.interact(strip, egui::Id::unique(("overview", self.reference_slot)), Sense::click_and_drag());
+        self.overview_input(ui, &strip_response, strip);
         let layout = self.layout(rect);
         self.handle_input(ui, &response, rect, &layout);
         if self.contigs.is_empty() {
@@ -3137,6 +3202,7 @@ impl App {
         }
         self.retired.extend(retire); // nothing painted this frame: free them next time
 
+        self.draw_overview(ui, &strip_response, strip);
         self.draw_shared_overlays(&painter, rect, vs, ve);
         for (i, section) in layout.sections.iter().enumerate() {
             if !section.is_positive() {
@@ -3202,11 +3268,17 @@ impl App {
                 let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
                 return Some(if collapsed { "Expand track" } else { "Collapse track to its header (or double-click the header)" }.to_owned());
             }
-            (pos.y < section.top() + HEADER_H && !Layout::close_button(section).contains(pos)).then(|| match hit {
-                Hit::Track(i) => self.tracks[i].full_title(),
-                Hit::Genes(i) => self.genes[i].path.display().to_string(),
-                Hit::Variants(i) => self.variants[i].path.display().to_string(),
-                Hit::Signal(i) => self.signals[i].path.display().to_string(),
+            (pos.y < section.top() + HEADER_H && !Layout::close_button(section).contains(pos)).then(|| {
+                let file = match hit {
+                    Hit::Track(i) => self.tracks[i].full_title(),
+                    Hit::Genes(i) => self.genes[i].path.display().to_string(),
+                    Hit::Variants(i) => self.variants[i].path.display().to_string(),
+                    Hit::Signal(i) => self.signals[i].path.display().to_string(),
+                };
+                match self.custom_name(hit) {
+                    Some(name) => format!("{name}\n{file}"),
+                    None => file,
+                }
             })
         });
         let on_bar = response.hover_pos().and_then(|p| self.rows_under(&layout, p).filter(|(_, rs)| rs.bar_hit().contains(p)));
@@ -3236,9 +3308,9 @@ impl App {
     /// A track header's title, shortened with an ellipsis to end before the close button (a long
     /// name ran underneath it). The full name is on the header's hover.
     /// It ends before `right` (what [`Self::header_rows`] leaves).
-    fn header_title(&self, painter: &egui::Painter, section: Rect, text: String, right: f32) -> Rect {
+    fn header_title(&self, painter: &egui::Painter, section: Rect, hit: Hit, text: String, right: f32) -> Rect {
         let font = FontId::new(13.5, crate::fonts::medium());
-        let color = self.pal().text;
+        let color = self.header_ink(hit).text;
         let room = (right - (section.left() + 4.0)).max(0.0);
         let mut galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
         if galley.size().x > room {
@@ -3259,27 +3331,29 @@ impl App {
     /// track) and close.
     fn header_buttons(&self, painter: &egui::Painter, section: Rect, hit: Hit) {
         let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
-        track_settings::paint_gear(painter, Layout::gear_button(section), self.pal().icon);
+        let icon = self.header_ink(hit).icon;
+        track_settings::paint_gear(painter, Layout::gear_button(section), icon);
         let fold = Layout::collapse_button(section);
-        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(19.0), self.pal().icon);
+        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(19.0), icon);
         let close = Layout::close_button(section);
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(19.0), self.pal().icon);
+        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(19.0), icon);
     }
 
     /// When a track's rows don't all fit: "rows 1–41 of 377" at the right of its header, before
     /// the grip. Returns where the title must end.
-    fn header_rows(&self, painter: &egui::Painter, section: Rect, rows: Option<RowScroll>) -> f32 {
+    fn header_rows(&self, painter: &egui::Painter, section: Rect, hit: Hit) -> f32 {
         let end = Layout::grip(section).left() - 6.0;
-        let Some(rs) = rows else { return end };
+        let Some(rs) = self.row_scroll(hit, section) else { return end };
+        let muted = self.header_ink(hit).muted;
         let (a, b) = rs.shown();
         let text = format!("{} {}–{} of {}", rs.noun, commas(a as u64), commas(b as u64), commas(rs.rows as u64));
-        let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), self.pal().muted);
+        let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), muted);
         let w = galley.size().x;
         // Only with room left for a title.
         if end - w < section.left() + 120.0 {
             return end;
         }
-        painter.galley(Pos2::new(end - w, section.top() + HEADER_H / 2.0 - galley.size().y / 2.0), galley, self.pal().muted);
+        painter.galley(Pos2::new(end - w, section.top() + HEADER_H / 2.0 - galley.size().y / 2.0), galley, muted);
         end - w - 12.0
     }
 
@@ -3483,6 +3557,7 @@ impl App {
         {
             if let Some(key) = track_settings::gear_at(layout, p) {
                 self.track_settings = Some(key);
+                self.look_draft = None;
                 return;
             }
             if let Some((key, _)) = layout.collapse_at(p) {
@@ -3507,6 +3582,14 @@ impl App {
             return;
         }
         if self.row_bar_input(ui, response, layout) {
+            return;
+        }
+        // Esc ended a drag on the ruler: nothing more until the button is let go (or the rest of
+        // it would pan).
+        if self.zoom_drag_cancelled {
+            if response.drag_stopped() || !response.dragged() {
+                self.zoom_drag_cancelled = false;
+            }
             return;
         }
 
@@ -3784,8 +3867,11 @@ impl App {
         let muted = self.pal().muted;
         let small = FontId::monospace(10.0);
 
-        // Ruler.
+        // Ruler, with the width of the view at its right end.
         let len = (ve - vs).max(1.0);
+        let span = painter.layout_no_wrap(span_text(len), FontId::proportional(11.0), muted);
+        let span_left = rect.right() - 6.0 - span.size().x;
+        painter.galley(Pos2::new(span_left, rect.top() + 9.0 - span.size().y / 2.0), span, muted);
         let label_w = 7.0 * commas(ve as u64).len() as f64 + 20.0;
         let mut step = nice_step(len / 10.0);
         while step as f64 * self.ppb < label_w {
@@ -3797,7 +3883,7 @@ impl App {
             painter.line_segment([Pos2::new(x, rect.top() + 16.0), Pos2::new(x, rect.top() + 24.0)], Stroke::new(1.0, muted));
             let label = commas(p);
             let half = 3.0 * label.len() as f32;
-            if x - half >= rect.left() && x + half <= rect.right() {
+            if x - half >= rect.left() && x + half <= span_left - 8.0 {
                 painter.text(Pos2::new(x, rect.top() + 9.0), Align2::CENTER_CENTER, label, small.clone(), text);
             }
             p += step;
@@ -3894,7 +3980,7 @@ impl App {
         }
         if unshown > 0 {
             let galley = painter.layout_no_wrap(format!("+{unshown} more (hover the ruler)"), FontId::proportional(10.0), self.pal().text);
-            let at = Pos2::new(rect.right() - galley.size().x - 8.0, rect.top() + 1.0);
+            let at = Pos2::new(span_left - galley.size().x - 14.0, rect.top() + 1.0);
             painter.rect_filled(Rect::from_min_size(at, galley.size() + Vec2::new(6.0, 3.0)), 3.0, self.pal().label_bg);
             painter.galley(at + Vec2::new(3.0, 1.5), galley, self.pal().text);
         }
@@ -3980,12 +4066,9 @@ impl App {
 
         // Header: name, state, close button.
         painter.hline(section.x_range(), top + 0.5, Stroke::new(1.0, self.pal().rule_strong));
-        painter.rect_filled(
-            Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)),
-            0.0,
-            self.pal().header,
-        );
-        let mut header = t.title();
+        let ink = self.header_ink(Hit::Track(i));
+        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, ink.fill);
+        let mut header = self.alignment_title(i);
         if let Some(e) = t.current.as_ref().and_then(|c| c.style.filter.expr) {
             header.push_str(&format!("  ·  filter: {}", crate::expr::text(e)));
         }
@@ -4002,8 +4085,8 @@ impl App {
         } else if let Some(e) = &t.error {
             header.push_str(&format!("  ·  error: {e}"));
         }
-        let right = self.header_rows(painter, section, self.row_scroll(Hit::Track(i), section));
-        self.header_title(painter, section, header, right);
+        let right = self.header_rows(painter, section, Hit::Track(i));
+        self.header_title(painter, section, Hit::Track(i), header, right);
         self.header_buttons(painter, section, Hit::Track(i));
 
         let Some(cur) = &t.current else { return };
@@ -4260,10 +4343,10 @@ impl App {
         painter.rect_filled(
             Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)),
             0.0,
-            self.pal().header,
+            self.header_ink(Hit::Genes(i)).fill,
         );
-        let right = self.header_rows(painter, section, self.row_scroll(Hit::Genes(i), section));
-        self.header_title(painter, section, self.gene_header(i), right);
+        let right = self.header_rows(painter, section, Hit::Genes(i));
+        self.header_title(painter, section, Hit::Genes(i), self.gene_header(i), right);
         self.header_buttons(painter, section, Hit::Genes(i));
 
         let Some(built) = &g.built else { return };
@@ -4367,13 +4450,11 @@ impl App {
         format!("No main transcript here  ·  {others} of {}{more} (All transcripts shows them; Evidence names the best)", genes[..genes.len().min(NAMED)].join(", "))
     }
 
-    /// Gene track `i`'s header: what is in view (as variant tracks say), then the file's counts.
+    /// Gene track `i`'s header: its name, and only while loading or failed, that.
     fn gene_header(&self, i: usize) -> String {
         let g = &self.genes[i];
-        match self.genes_in_view(i) {
-            Some(n) => format!("Genes  ·  {}  ·  {} in view  ·  {}", g.file_name(), commas(n as u64), g.status()),
-            None => format!("Genes  ·  {}  ·  {}", g.file_name(), g.status()),
-        }
+        let name = self.custom_name(Hit::Genes(i)).map_or_else(|| format!("Genes  ·  {}", g.file_name()), str::to_owned);
+        if g.annotation().is_some() { name } else { format!("{name}  ·  {}", g.status()) }
     }
 
     /// The transcript under `pos` in gene track `i`, with its row.
@@ -4488,7 +4569,7 @@ impl App {
         let s = &self.signals[i];
         let top = section.top();
         painter.hline(section.x_range(), top + 0.5, Stroke::new(1.0, self.pal().rule_strong));
-        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, self.pal().header);
+        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, self.header_ink(Hit::Signal(i)).fill);
         let n = section.width().max(1.0) as usize;
         let body = Rect::from_min_max(Pos2::new(section.left(), top + HEADER_H + 2.0), Pos2::new(section.right(), section.bottom() - 2.0));
         let mut state = if let Some(e) = &s.error {
@@ -4526,7 +4607,8 @@ impl App {
                 state = if cols.iter().all(Option::is_none) { "no values here".to_owned() } else { format!("range {} – {}", fmt_value(lo), fmt_value(hi)) };
             }
         }
-        self.header_title(painter, section, format!("Signal  ·  {}  ·  {state}", s.file_name()), Layout::grip(section).left() - 6.0);
+        let name = self.custom_name(Hit::Signal(i)).map_or_else(|| format!("Signal  ·  {}", s.file_name()), str::to_owned);
+        self.header_title(painter, section, Hit::Signal(i), format!("{name}  ·  {state}"), Layout::grip(section).left() - 6.0);
         self.header_buttons(painter, section, Hit::Signal(i));
     }
 
@@ -4548,29 +4630,19 @@ impl App {
         let v = &self.variants[i];
         let top = section.top();
         painter.hline(section.x_range(), top + 0.5, Stroke::new(1.0, self.pal().rule_strong));
-        painter.rect_filled(
-            Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)),
-            0.0,
-            self.pal().header,
-        );
+        let ink = self.header_ink(Hit::Variants(i));
+        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, ink.fill);
+        // Just the name, and why nothing shows when it doesn't (an error, too wide, loading).
+        let name = self.custom_name(Hit::Variants(i)).map_or_else(|| format!("Variants  ·  {}", v.file_name()), str::to_owned);
         let state = if let Some(e) = &v.error {
-            format!("error: {e}")
+            Some(format!("error: {e}"))
         } else if ve - vs > variants::VARIANT_WINDOW as f64 {
-            "zoom in to see variants (view wider than 10 Mb)".to_owned()
-        } else if let Some(cur) = &v.current {
-            let shown = cur.variants.iter().filter(|x| (x.end as f64) > vs && (x.start as f64) < ve).count();
-            let more = if cur.overflow > 0 { format!(" · {} overlapping in the last row", commas(cur.overflow as u64)) } else { String::new() };
-            format!("{} in view · loaded {} in {:.0} ms{more}", commas(shown as u64), commas(cur.variants.len() as u64), cur.elapsed.as_secs_f64() * 1000.0)
+            Some("zoom in to see variants (view wider than 10 Mb)".to_owned())
         } else {
-            "loading…".to_owned()
+            v.current.is_none().then(|| "loading…".to_owned())
         };
-        let right = self.header_rows(painter, section, self.row_scroll(Hit::Variants(i), section));
-        let title = self.header_title(
-            painter,
-            section,
-            format!("Variants  ·  {}  ·  {} sample{}  ·  {state}", v.file_name(), v.samples.len(), if v.samples.len() == 1 { "" } else { "s" }),
-            right,
-        );
+        let right = self.header_rows(painter, section, Hit::Variants(i));
+        let title = self.header_title(painter, section, Hit::Variants(i), state.map_or_else(|| name.clone(), |st| format!("{name}  ·  {st}")), right);
         // What the site colours mean, after the title while it fits; nothing (not a bare
         // "CLNSIG:") when no loaded record has the field.
         let legend = v.legend(6);
@@ -4580,19 +4652,19 @@ impl App {
             let font = FontId::proportional(12.0);
             let cy = top + HEADER_H / 2.0;
             let mut x = title.right() + 14.0;
-            let galley = painter.layout_no_wrap(format!("{key}:"), font.clone(), self.pal().text);
+            let galley = painter.layout_no_wrap(format!("{key}:"), font.clone(), ink.text);
             if x + galley.size().x < right - 2.0 {
                 let w = galley.size().x;
-                painter.galley(Pos2::new(x, cy - galley.size().y / 2.0), galley, self.pal().text);
+                painter.galley(Pos2::new(x, cy - galley.size().y / 2.0), galley, ink.text);
                 x += w + 6.0;
                 for (label, [r, g, b]) in legend {
-                    let galley = painter.layout_no_wrap(label, font.clone(), self.pal().text);
+                    let galley = painter.layout_no_wrap(label, font.clone(), ink.text);
                     if x + 14.0 + galley.size().x > right - 2.0 {
                         break;
                     }
                     painter.rect_filled(Rect::from_center_size(Pos2::new(x + 5.0, cy), Vec2::splat(10.0)), 1.0, Color32::from_rgb(r, g, b));
                     let w = galley.size().x;
-                    painter.galley(Pos2::new(x + 14.0, cy - galley.size().y / 2.0), galley, self.pal().text);
+                    painter.galley(Pos2::new(x + 14.0, cy - galley.size().y / 2.0), galley, ink.text);
                     x += 14.0 + w + 10.0;
                 }
             }
@@ -5111,6 +5183,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn span_labels() {
+        let cases = [(250.0, "250 bp"), (999.4, "999 bp"), (1000.0, "1.0 kb"), (31_400.0, "31.4 kb"), (250_000.0, "250 kb"), (999_960.0, "1.0 Mb"), (1_200_000.0, "1.2 Mb"), (248_956_422.0, "249 Mb")];
+        for (bp, want) in cases {
+            assert_eq!(span_text(bp), want, "{bp}");
+        }
+    }
 
     #[test]
     fn sv_sizes() {

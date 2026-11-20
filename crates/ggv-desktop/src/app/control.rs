@@ -1614,6 +1614,189 @@ mod tests {
         assert!(app.center < center, "they pan");
     }
 
+    /// One frame of a pane as the window runs it: the shortcut keys (Esc), then the overview
+    /// strip over the top of the canvas, then the ruler and tracks below it. Returns the bar.
+    fn pane_frame(ctx: &egui::Context, app: &mut App, full: egui::Rect, events: Vec<egui::Event>) -> egui::Rect {
+        let raw = egui::RawInput { events, screen_rect: Some(full), ..Default::default() };
+        let mut bar = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(raw, |ui| {
+            app.action_keys(ui.ctx(), false);
+            let response = ui.allocate_rect(full, egui::Sense::click_and_drag());
+            let (strip, rect) = App::split_overview(full);
+            let strip_response = ui.interact(strip, egui::Id::unique(("overview", app.reference_slot)), egui::Sense::click_and_drag());
+            app.overview_input(ui, &strip_response, strip);
+            let layout = app.arrange(rect);
+            app.handle_input(ui, &response, rect, &layout);
+            bar = app.overview_bar(ui.painter(), strip);
+        });
+        out.textures_delta.clear();
+        bar
+    }
+
+    fn button(p: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+    }
+
+    fn esc() -> egui::Event {
+        egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }
+    }
+
+    /// Esc during a drag on the ruler drops the marked region: no zoom on release, and the rest
+    /// of the drag doesn't pan either.
+    #[test]
+    fn escape_cancels_a_ruler_drag() {
+        if !data_dir().join("HG002.revio.slices.bam").exists() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        let mut app = gnas_with_reads(&ctx, &[]);
+        let full = window(800.0 + super::super::overview::OVERVIEW_H);
+        app.width = full.width();
+        app.attach_goto("chr20:58900000-58910000").unwrap();
+        let (ppb, center) = (app.ppb, app.center);
+        let y = super::super::overview::OVERVIEW_H + super::super::REF_TOP + 2.0;
+        let at = |x: f32| egui::pos2(x, y);
+        pane_frame(&ctx, &mut app, full, vec![egui::Event::PointerMoved(at(200.0))]);
+        pane_frame(&ctx, &mut app, full, vec![button(at(200.0), true)]);
+        pane_frame(&ctx, &mut app, full, vec![egui::Event::PointerMoved(at(300.0))]);
+        pane_frame(&ctx, &mut app, full, vec![egui::Event::PointerMoved(at(400.0))]);
+        assert!(app.zoom_drag.is_some(), "marking");
+        pane_frame(&ctx, &mut app, full, vec![esc()]);
+        assert!(app.zoom_drag.is_none());
+        pane_frame(&ctx, &mut app, full, vec![egui::Event::PointerMoved(at(600.0))]);
+        pane_frame(&ctx, &mut app, full, vec![button(at(600.0), false)]);
+        pane_frame(&ctx, &mut app, full, vec![]);
+        assert_eq!((app.ppb, app.center), (ppb, center), "neither zoomed nor panned");
+        assert!(!app.zoom_drag_cancelled, "the next drag works again");
+    }
+
+    /// The locus box suggests genes by prefix: arrows and Enter go to one (padded by 10% of its
+    /// length on each side), and so does Enter on a gene's exact name. Anything else goes to the
+    /// locus parser exactly as typed.
+    #[test]
+    fn the_locus_box_suggests_genes() {
+        if !data_dir().join("HG002.revio.slices.bam").exists() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        let mut app = gnas_with_reads(&ctx, &[]);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let raw = egui::RawInput { events, screen_rect: Some(screen), ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                app.toolbar_ui(ui, &ctx);
+            });
+            out.textures_delta.clear();
+        };
+        let key = |k: egui::Key| egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+        let enter = |app: &mut App, text: &str, keys: &[egui::Key]| {
+            app.pending_goto = None;
+            app.focus_locus = true;
+            frame(app, vec![]);
+            frame(app, vec![egui::Event::Text(text.to_owned())]);
+            assert_eq!(app.locus_text, text);
+            for k in keys {
+                frame(app, vec![key(*k)]);
+            }
+            frame(app, vec![key(egui::Key::Enter)]);
+            app.pending_goto.take()
+        };
+        let padded = |app: &App, name: &str| {
+            let (_, extent) = app.gene_spans(name).into_iter().next().unwrap();
+            let pad = (extent.len() / 10).max(50);
+            assert_eq!(app.pad_gene(extent.clone()), ggv_model::Region { contig: extent.contig.clone(), start: extent.start - pad, end: extent.end + pad });
+            app.pad_gene(extent).to_string()
+        };
+
+        // "gna": GNAS, then GNAS-AS1; Down twice picks the second.
+        let gnas_as1 = padded(&app, "GNAS-AS1");
+        assert_eq!(enter(&mut app, "gna", &[egui::Key::ArrowDown, egui::Key::ArrowDown]), Some(gnas_as1));
+        let gnas = padded(&app, "GNAS");
+        assert_eq!(enter(&mut app, "gna", &[egui::Key::ArrowDown]), Some(gnas.clone()));
+        assert_eq!(enter(&mut app, "gna", &[egui::Key::ArrowDown, egui::Key::ArrowUp]), Some("gna".to_owned()), "back up to none chosen");
+        assert_eq!(enter(&mut app, "gnas", &[]), Some(gnas), "an exact name needs no arrow");
+        assert_eq!(enter(&mut app, "gna", &[]), Some("gna".to_owned()), "a prefix alone is left to the parser");
+        let locus = "chr20:58,900,000-58,910,000";
+        assert_eq!(enter(&mut app, locus, &[egui::Key::ArrowDown]), Some(locus.to_owned()));
+
+        // A click on the second suggestion (the press takes the box's focus first).
+        app.pending_goto = None;
+        app.focus_locus = true;
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![egui::Event::Text("gna".to_owned())]);
+        let popup = ctx.memory(|m| m.area_rect(egui::Id::unique("locus-suggestions"))).expect("suggestions shown");
+        let row = egui::pos2(popup.left() + 40.0, popup.top() + 5.0 + 26.0 * 1.5);
+        frame(&mut app, vec![egui::Event::PointerMoved(row)]);
+        frame(&mut app, vec![button(row, true)]);
+        frame(&mut app, vec![button(row, false)]);
+        assert_eq!(app.pending_goto.take(), Some(padded(&app, "GNAS-AS1")));
+    }
+
+    /// The overview strip: a click on the bar centres the view there and Back returns; the view's
+    /// window can be dragged to pan (one Back step for the whole drag), and Esc during the drag
+    /// puts the view back. The window never gets narrower than a few pixels.
+    #[test]
+    fn the_overview_strip_moves_the_view() {
+        if !data_dir().join("HG002.revio.slices.bam").exists() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        let mut app = gnas_with_reads(&ctx, &[]);
+        let full = window(800.0 + super::super::overview::OVERVIEW_H);
+        app.width = full.width();
+        app.attach_goto("chr20:31180000-31190000").unwrap();
+        let start = (app.contig, app.center, app.ppb);
+        let y = super::super::overview::OVERVIEW_H / 2.0;
+        let bar = pane_frame(&ctx, &mut app, full, vec![]);
+        let len = app.contig_len();
+        let base_at = |x: f32| f64::from((x - bar.left()) / bar.width()) * len;
+
+        // Click: centred there, zoom kept.
+        let x = bar.left() + bar.width() * 0.75;
+        pane_frame(&ctx, &mut app, full, vec![egui::Event::PointerMoved(egui::pos2(x, y))]);
+        pane_frame(&ctx, &mut app, full, vec![button(egui::pos2(x, y), true)]);
+        pane_frame(&ctx, &mut app, full, vec![button(egui::pos2(x, y), false)]);
+        assert!((app.center - base_at(x)).abs() < 1.0, "{} vs {}", app.center, base_at(x));
+        assert_eq!(app.ppb, start.2);
+        app.go_back();
+        assert_eq!((app.contig, app.center, app.ppb), start, "Back returns");
+
+        // Drag the window 40 px right: the view moves by as many bases as 40 px of bar are.
+        let window = app.overview_window(bar);
+        assert!(window.width() >= 6.0, "visible at this zoom: {}", window.width());
+        let from = window.center();
+        let step = |x: f32| egui::Event::PointerMoved(egui::pos2(x, y));
+        pane_frame(&ctx, &mut app, full, vec![step(from.x)]);
+        pane_frame(&ctx, &mut app, full, vec![button(egui::pos2(from.x, y), true)]);
+        for dx in [10.0, 20.0, 40.0] {
+            pane_frame(&ctx, &mut app, full, vec![step(from.x + dx)]);
+        }
+        pane_frame(&ctx, &mut app, full, vec![button(egui::pos2(from.x + 40.0, y), false)]);
+        pane_frame(&ctx, &mut app, full, vec![]);
+        let moved = app.center - start.1;
+        let want = base_at(from.x + 40.0) - base_at(from.x);
+        assert!((moved - want).abs() < want * 0.02, "moved {moved}, want {want}");
+        assert_eq!(app.back.last().copied(), Some(start), "one Back step for the drag");
+
+        // Esc mid-drag: back where it started, and the rest of the drag does nothing.
+        let here = (app.contig, app.center, app.ppb);
+        let from = app.overview_window(bar).center();
+        pane_frame(&ctx, &mut app, full, vec![step(from.x)]);
+        pane_frame(&ctx, &mut app, full, vec![button(egui::pos2(from.x, y), true)]);
+        pane_frame(&ctx, &mut app, full, vec![step(from.x + 30.0)]);
+        pane_frame(&ctx, &mut app, full, vec![step(from.x + 60.0)]);
+        assert_ne!(app.center, here.1, "dragging");
+        pane_frame(&ctx, &mut app, full, vec![esc()]);
+        pane_frame(&ctx, &mut app, full, vec![step(from.x + 90.0)]);
+        pane_frame(&ctx, &mut app, full, vec![button(egui::pos2(from.x + 90.0, y), false)]);
+        assert_eq!((app.contig, app.center, app.ppb), here);
+
+        // At base-pair zoom the window still shows.
+        app.attach_goto("chr20:31185000").unwrap();
+        assert!(app.overview_window(bar).width() >= 6.0 - 1e-3);
+    }
+
     /// In a small window, the alignment track (its reads scroll) gives way first; the small
     /// tracks keep their header and a whole row; only when even that doesn't fit does the stack
     /// scroll, and scrolled to the end, room left below the last tracks goes to the reads.
@@ -1711,7 +1894,7 @@ mod tests {
         assert!(app.shown_variants(0).is_none(), "on another contig");
     }
 
-    /// A gene track with nothing in view says what is in view, as the other tracks do.
+    /// A gene track counts what is in view (for "No genes here"); its header is just its name.
     #[test]
     fn the_gene_track_says_what_is_in_view() {
         if !data_dir().join("HG002.revio.slices.bam").exists() {
@@ -1720,11 +1903,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = gnas_window(&ctx, None);
         assert!(app.genes_in_view(0).is_some_and(|n| n > 0));
-        assert!(app.gene_header(0).contains(" in view"), "{}", app.gene_header(0));
+        assert_eq!(app.gene_header(0), format!("Genes  ·  {}", app.genes[0].file_name()));
         app.attach_goto("chr20:31165000-31184000").unwrap();
         settle_all(&mut app, |a| a.genes[0].built.as_ref().is_some_and(|b| b.start <= 31_165_000 && b.end >= 31_184_000));
         assert_eq!(app.genes_in_view(0), Some(0));
-        assert!(app.gene_header(0).contains("·  0 in view  ·"), "{}", app.gene_header(0));
     }
 
     /// One frame of `draw` in a `w` × 900 window, as the window draws it.

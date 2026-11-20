@@ -50,12 +50,15 @@ pub enum Kind {
 
 pub type Key = (Kind, PathBuf);
 
-/// The order and sizes the person chose, and which tracks they collapsed to their header.
+/// The order and sizes the person chose, which tracks they collapsed to their header, and the
+/// names and colours they gave tracks (in the track settings).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Arrangement {
     pub order: Vec<Key>,
     pub heights: HashMap<Key, f32>,
     pub collapsed: HashSet<Key>,
+    pub names: HashMap<Key, String>,
+    pub colors: HashMap<Key, [u8; 3]>,
 }
 
 /// One track as saved in a session: kind, file, and its height if set.
@@ -67,6 +70,12 @@ pub struct Saved {
     pub height: Option<f32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub collapsed: bool,
+    /// The name the person gave the track.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The track's colour, as `#rrggbb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// A drag in progress.
@@ -79,6 +88,47 @@ pub enum Arranging {
     Move { key: Key, y: f32 },
 }
 
+/// A header bar's fill and what is drawn on it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct HeaderInk {
+    pub fill: egui::Color32,
+    pub text: egui::Color32,
+    pub muted: egui::Color32,
+    pub icon: egui::Color32,
+}
+
+/// Whether dark text reads better than white on `c` (WCAG contrast, from relative luminance).
+pub(super) fn light(c: egui::Color32) -> bool {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = 0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b());
+    // Contrast with black (l + 0.05) / 0.05 against white 1.05 / (l + 0.05).
+    (l + 0.05) * (l + 0.05) > 0.05 * 1.05
+}
+
+/// `#rrggbb`.
+pub fn hex(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+/// `#rrggbb`, `rrggbb` or `#rgb` (any case); `None` for anything else.
+pub fn parse_hex(text: &str) -> Option<[u8; 3]> {
+    let t = text.trim();
+    let t = t.strip_prefix('#').unwrap_or(t);
+    if !t.is_ascii() {
+        return None;
+    }
+    let full: String = match t.len() {
+        3 => t.chars().flat_map(|c| [c, c]).collect(),
+        6 => t.to_owned(),
+        _ => return None,
+    };
+    let byte = |i: usize| u8::from_str_radix(&full[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
 /// Smallest heights a person can drag a track to.
 const MIN_ALIGN_H: f32 = 48.0;
 const MIN_OTHER_H: f32 = HEADER_H + 12.0;
@@ -89,7 +139,14 @@ impl Arrangement {
     pub fn saved(&self, present: &[Key]) -> Vec<Saved> {
         present
             .iter()
-            .map(|k| Saved { kind: k.0, path: k.1.clone(), height: self.heights.get(k).copied(), collapsed: self.collapsed.contains(k) })
+            .map(|k| Saved {
+                kind: k.0,
+                path: k.1.clone(),
+                height: self.heights.get(k).copied(),
+                collapsed: self.collapsed.contains(k),
+                name: self.names.get(k).cloned(),
+                color: self.colors.get(k).map(|&c| hex(c)),
+            })
             .collect()
     }
 
@@ -98,6 +155,8 @@ impl Arrangement {
             order: saved.iter().map(|s| (s.kind, s.path.clone())).collect(),
             heights: saved.iter().filter_map(|s| Some(((s.kind, s.path.clone()), s.height?))).collect(),
             collapsed: saved.iter().filter(|s| s.collapsed).map(|s| (s.kind, s.path.clone())).collect(),
+            names: saved.iter().filter_map(|s| Some(((s.kind, s.path.clone()), s.name.clone().filter(|n| !n.trim().is_empty())?))).collect(),
+            colors: saved.iter().filter_map(|s| Some(((s.kind, s.path.clone()), parse_hex(s.color.as_deref()?)?))).collect(),
         }
     }
 
@@ -138,6 +197,40 @@ impl App {
         let g = self.genes.iter().map(|g| (Kind::Genes, g.path.clone()));
         let s = self.signals.iter().map(|s| (Kind::Signals, s.path.clone()));
         v.chain(a).chain(s).chain(g).collect()
+    }
+
+    /// The name the person gave track `hit`, if any.
+    pub(super) fn custom_name(&self, hit: Hit) -> Option<&str> {
+        self.arrangement.names.get(&self.key_of(hit)?).map(String::as_str)
+    }
+
+    /// The colours of track `hit`'s header bar: the colour the person gave it (with text and
+    /// icons that stay readable on it), else the theme's.
+    pub(super) fn header_ink(&self, hit: Hit) -> HeaderInk {
+        let key = self.key_of(hit);
+        self.ink_of(key.as_ref())
+    }
+
+    pub(super) fn ink_of(&self, key: Option<&Key>) -> HeaderInk {
+        let pal = self.pal();
+        match key.and_then(|k| self.arrangement.colors.get(k)) {
+            None => HeaderInk { fill: pal.header, text: pal.text, muted: pal.muted, icon: pal.icon },
+            Some(&[r, g, b]) => {
+                let fill = egui::Color32::from_rgb(r, g, b);
+                if light(fill) {
+                    let c = |v: u8| egui::Color32::from_gray(v);
+                    HeaderInk { fill, text: c(20), muted: c(55), icon: c(40) }
+                } else {
+                    let c = |a: u8| egui::Color32::from_white_alpha(a);
+                    HeaderInk { fill, text: egui::Color32::WHITE, muted: c(200), icon: c(225) }
+                }
+            }
+        }
+    }
+
+    /// Alignment track `i`'s header title: the name the person gave it, else `file · sample`.
+    pub(super) fn alignment_title(&self, i: usize) -> String {
+        self.custom_name(Hit::Track(i)).map_or_else(|| self.tracks[i].title(), str::to_owned)
     }
 
     /// The key of the track `hit` names.
@@ -394,7 +487,8 @@ impl App {
         let header = hover.and_then(|p| layout.header_at(p)).map(|(k, _)| k);
         for (k, r) in &layout.order {
             let grip = Layout::grip(*r);
-            let c = if header == Some(k) { pal.text } else { pal.muted };
+            let ink = self.ink_of(Some(k));
+            let c = if header == Some(k) { ink.text } else { ink.muted };
             for col in 0..2 {
                 for row in 0..3 {
                     let at = grip.center() + Vec2::new((col as f32 - 0.5) * 5.0, (row as f32 - 1.0) * 5.0);
@@ -650,6 +744,44 @@ mod tests {
 
     fn k(kind: Kind, p: &str) -> Key {
         (kind, PathBuf::from(p))
+    }
+
+    #[test]
+    fn hex_colours_read_and_write() {
+        assert_eq!(parse_hex("#E69F00"), Some([0xE6, 0x9F, 0x00]));
+        assert_eq!(parse_hex(" 56b4e9 "), Some([0x56, 0xB4, 0xE9]));
+        assert_eq!(parse_hex("#f80"), Some([0xFF, 0x88, 0x00]));
+        for bad in ["", "#", "#12345", "#1234567", "#gg0000", "#ééé"] {
+            assert_eq!(parse_hex(bad), None, "{bad:?}");
+        }
+        assert_eq!(hex([0xE6, 0x9F, 0x00]), "#e69f00");
+    }
+
+    /// Header text is dark on light colours, white on dark ones.
+    #[test]
+    fn header_text_contrasts_with_its_bar() {
+        let c = |[r, g, b]: [u8; 3]| egui::Color32::from_rgb(r, g, b);
+        for light_one in [[0xE6, 0x9F, 0x00], [0x56, 0xB4, 0xE9], [0xF0, 0xE4, 0x42], [246, 246, 246]] {
+            assert!(light(c(light_one)), "{light_one:?}");
+        }
+        for dark_one in [[0x00, 0x72, 0xB2], [0, 0, 0], [42, 42, 42]] {
+            assert!(!light(c(dark_one)), "{dark_one:?}");
+        }
+    }
+
+    /// Names and colours are saved with the session, only for the tracks that have them.
+    #[test]
+    fn names_and_colours_are_saved() {
+        let (a, b) = (k(Kind::Alignments, "/x/a.bam"), k(Kind::Signals, "/x/b.bw"));
+        let mut arr = Arrangement::default();
+        arr.names.insert(a.clone(), "Tumour".into());
+        arr.colors.insert(b.clone(), [0, 0x72, 0xB2]);
+        let json = serde_json::to_string(&arr.saved(&[a.clone(), b.clone()])).unwrap();
+        assert_eq!(json.matches("\"name\"").count(), 1, "{json}");
+        assert!(json.contains("\"#0072b2\""), "{json}");
+        let back: Vec<Saved> = serde_json::from_str(&json).unwrap();
+        let back = Arrangement::from_saved(&back);
+        assert_eq!((back.names, back.colors), (arr.names, arr.colors));
     }
 
     /// With room below the last track the edge pushes the track below down whole; past that it

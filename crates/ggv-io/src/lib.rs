@@ -9,6 +9,7 @@ pub mod attach;
 mod bam_file;
 mod error;
 pub mod catalog;
+pub mod cytoband;
 pub mod demo;
 pub mod folders;
 pub mod genomes;

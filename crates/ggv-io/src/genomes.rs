@@ -5,6 +5,11 @@
 //! (`GGV_GENOME_DIR`, else `%LOCALAPPDATA%\ggv\genomes`, `~/Library/Caches/ggv/genomes` or
 //! `$XDG_CACHE_HOME/ggv/genomes`). Downloads use the system's `curl` (Windows 10+, macOS and
 //! Linux ship it), into a `.part` file that resumes if interrupted.
+//!
+//! Human and mouse genomes also have UCSC's chromosome bands (`cytoBand.txt.gz`, a few KB) for
+//! the desktop's chromosome overview, fetched with the genome (or later, once, for a genome
+//! downloaded before) and only when small, as IGV does: a large table is mostly unplaced
+//! contigs and adds nothing to an ideogram.
 
 use std::{
     path::{Path, PathBuf},
@@ -20,17 +25,22 @@ pub struct Genome {
     pub aliases: &'static [&'static str],
     /// Approximate download size of the reference and genes, in bytes (for the list).
     pub size: u64,
+    /// UCSC has a chromosome band table for it (`database/cytoBand.txt.gz`).
+    pub banded: bool,
 }
+
+/// A band table larger than this isn't downloaded (IGV's limit for text cytoband files).
+pub const CYTOBANDS_MAX: u64 = 100_000;
 
 const UCSC: &str = "https://hgdownload.soe.ucsc.edu/goldenPath";
 
 pub const GENOMES: &[Genome] = &[
-    Genome { id: "hg38", name: "Human GRCh38 (hg38)", aliases: &["grch38", "hg38", "human"], size: 877_000_000 },
-    Genome { id: "hg19", name: "Human GRCh37 (hg19)", aliases: &["grch37", "hg19", "b37"], size: 836_000_000 },
-    Genome { id: "hs1", name: "Human T2T-CHM13 v2.0 (hs1)", aliases: &["t2t", "chm13", "t2t-chm13", "hs1"], size: 852_000_000 },
-    Genome { id: "mm39", name: "Mouse GRCm39 (mm39)", aliases: &["grcm39", "mm39", "mouse"], size: 745_000_000 },
-    Genome { id: "mm10", name: "Mouse GRCm38 (mm10)", aliases: &["grcm38", "mm10"], size: 743_000_000 },
-    Genome { id: "sacCer3", name: "Yeast S. cerevisiae R64 (sacCer3)", aliases: &["saccer3", "yeast", "r64"], size: 3_400_000 },
+    Genome { id: "hg38", name: "Human GRCh38 (hg38)", aliases: &["grch38", "hg38", "human"], size: 877_000_000, banded: true },
+    Genome { id: "hg19", name: "Human GRCh37 (hg19)", aliases: &["grch37", "hg19", "b37"], size: 836_000_000, banded: true },
+    Genome { id: "hs1", name: "Human T2T-CHM13 v2.0 (hs1)", aliases: &["t2t", "chm13", "t2t-chm13", "hs1"], size: 852_000_000, banded: false },
+    Genome { id: "mm39", name: "Mouse GRCm39 (mm39)", aliases: &["grcm39", "mm39", "mouse"], size: 745_000_000, banded: true },
+    Genome { id: "mm10", name: "Mouse GRCm38 (mm10)", aliases: &["grcm38", "mm10"], size: 743_000_000, banded: true },
+    Genome { id: "sacCer3", name: "Yeast S. cerevisiae R64 (sacCer3)", aliases: &["saccer3", "yeast", "r64"], size: 3_400_000, banded: false },
 ];
 
 impl Genome {
@@ -40,6 +50,11 @@ impl Genome {
 
     pub fn genes_url(&self) -> String {
         format!("{UCSC}/{0}/bigZips/genes/{0}.ncbiRefSeq.gtf.gz", self.id)
+    }
+
+    /// UCSC's chromosome bands. Not `cytoBandIdeo`: mm39's has only the centromeres.
+    pub fn cytobands_url(&self) -> Option<String> {
+        self.banded.then(|| format!("{UCSC}/{}/database/cytoBand.txt.gz", self.id))
     }
 }
 
@@ -62,11 +77,18 @@ pub fn cache_dir() -> Option<PathBuf> {
 pub struct Local {
     pub reference: PathBuf,
     pub genes: PathBuf,
+    /// Its chromosome bands, beside the reference (where [`crate::cytoband::beside`] finds
+    /// them); there only for a banded genome, once fetched.
+    pub cytobands: PathBuf,
 }
 
 pub fn local(g: &Genome) -> Option<Local> {
     let dir = cache_dir()?.join(g.id);
-    Some(Local { reference: dir.join(format!("{}.2bit", g.id)), genes: dir.join(format!("{}.ncbiRefSeq.gtf.gz", g.id)) })
+    Some(Local {
+        reference: dir.join(format!("{}.2bit", g.id)),
+        genes: dir.join(format!("{}.ncbiRefSeq.gtf.gz", g.id)),
+        cytobands: dir.join(format!("{}.cytoBand.txt.gz", g.id)),
+    })
 }
 
 /// The genome's files if both are already downloaded.
@@ -90,7 +112,36 @@ pub fn fetch(g: &Genome, progress: Progress) -> std::io::Result<Local> {
     }
     // Opening it once proves the reference is whole (a cut-off .2bit fails here, not later).
     crate::ReferenceFasta::open(&l.reference).map_err(|e| std::io::Error::other(format!("{}: {e}", l.reference.display())))?;
+    // Bands are a nicety: the genome opens without them (they're tried again later).
+    let _ = fetch_cytobands(g, progress);
     Ok(l)
+}
+
+/// Downloads the genome's chromosome bands if it has them and they're missing, checking first
+/// that the table is small ([`CYTOBANDS_MAX`]) and after that it reads as one. The file, or
+/// `None` for a genome without bands or a table too large to be worth it.
+pub fn fetch_cytobands(g: &Genome, progress: Progress) -> std::io::Result<Option<PathBuf>> {
+    let (Some(url), Some(l)) = (g.cytobands_url(), local(g)) else { return Ok(None) };
+    if l.cytobands.is_file() {
+        return Ok(Some(l.cytobands));
+    }
+    if content_length(&url) > CYTOBANDS_MAX {
+        return Ok(None);
+    }
+    if let Some(dir) = l.cytobands.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    download(&url, &l.cytobands, progress)?;
+    // A server that didn't say its size: still kept only if small, and only if it parses.
+    let problem = match std::fs::metadata(&l.cytobands)?.len() {
+        n if n > CYTOBANDS_MAX => Some(format!("{n} bytes, more than {CYTOBANDS_MAX}")),
+        _ => crate::cytoband::Cytobands::read(&l.cytobands).err().map(|e| e.to_string()),
+    };
+    if let Some(problem) = problem {
+        let _ = std::fs::remove_file(&l.cytobands);
+        return Err(std::io::Error::other(format!("{url}: {problem}")));
+    }
+    Ok(Some(l.cytobands))
 }
 
 fn content_length(url: &str) -> u64 {
@@ -152,5 +203,17 @@ mod tests {
         assert!(find("hg99").is_none());
         assert_eq!(find("hg38").unwrap().reference_url(), "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit");
         assert!(find("hs1").unwrap().genes_url().ends_with("hs1/bigZips/genes/hs1.ncbiRefSeq.gtf.gz"));
+    }
+
+    #[test]
+    fn human_and_mouse_have_bands_beside_the_reference() {
+        assert_eq!(find("hg38").unwrap().cytobands_url().as_deref(), Some("https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz"));
+        assert!(find("mm10").unwrap().cytobands_url().is_some());
+        assert_eq!(find("sacCer3").unwrap().cytobands_url(), None, "yeast chromosomes aren't banded");
+        assert_eq!(find("hs1").unwrap().cytobands_url(), None, "only a bigBed for T2T");
+        let l = local(find("hg19").unwrap()).unwrap();
+        // Named so the overview finds it next to the reference.
+        assert_eq!(l.cytobands.file_name().unwrap(), "hg19.cytoBand.txt.gz");
+        assert!(crate::cytoband::is_cytoband_name(&l.cytobands.to_string_lossy()));
     }
 }

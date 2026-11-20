@@ -1,5 +1,5 @@
 //! A track's settings panel, opened from the gear in its header or "Track settings…" in the
-//! right-click menu: display switches that don't belong at a position (squish, splice
+//! right-click menu: the track's name and the colour of its header bar, display switches that don't belong at a position (squish, splice
 //! junctions), copying the view, and managing the track (filter, move, collapse, close).
 //!
 //! Also the read details window ("Read details" in the right-click menu, or the palette for the
@@ -9,7 +9,11 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 
-use super::{AlignedRead, App, Hit, Layout, actions::Action, arrange::Key};
+use super::{
+    AlignedRead, App, Hit, Layout,
+    actions::Action,
+    arrange::{self, Key},
+};
 use crate::{theme, util::commas};
 
 /// The read whose details are open: the track's file (track indices change as tracks move),
@@ -19,6 +23,61 @@ pub(super) struct ReadDetails {
     pub path: PathBuf,
     pub read: AlignedRead,
     pub base: u64,
+}
+
+/// The Okabe–Ito colours (distinguishable with colour-vision deficiencies), in their usual order.
+pub(super) const OKABE_ITO: [(&str, [u8; 3]); 8] = [
+    ("Orange", [0xE6, 0x9F, 0x00]),
+    ("Sky blue", [0x56, 0xB4, 0xE9]),
+    ("Bluish green", [0x00, 0x9E, 0x73]),
+    ("Yellow", [0xF0, 0xE4, 0x42]),
+    ("Blue", [0x00, 0x72, 0xB2]),
+    ("Vermillion", [0xD5, 0x5E, 0x00]),
+    ("Reddish purple", [0xCC, 0x79, 0xA7]),
+    ("Black", [0x00, 0x00, 0x00]),
+];
+
+/// The settings window's name and colour fields as typed, for the track `key`: the name and hex
+/// text are kept as typed (an unfinished hex code doesn't apply), and whether "Custom" is open.
+#[derive(Clone, Debug)]
+pub(super) struct LookDraft {
+    key: Key,
+    name: String,
+    hex: String,
+    custom: bool,
+}
+
+impl LookDraft {
+    fn of(key: &Key, arrangement: &arrange::Arrangement) -> Self {
+        let color = arrangement.colors.get(key).copied();
+        Self {
+            key: key.clone(),
+            name: arrangement.names.get(key).cloned().unwrap_or_default(),
+            hex: color.map(arrange::hex).unwrap_or_default(),
+            custom: color.is_some_and(|c| !OKABE_ITO.iter().any(|(_, o)| *o == c)),
+        }
+    }
+}
+
+/// A colour swatch, ringed in the accent colour while chosen; `slash` marks the default colour.
+fn swatch(ui: &mut egui::Ui, color: egui::Color32, chosen: bool, slash: bool) -> egui::Response {
+    let p = theme::palette(ui);
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let inner = rect.shrink(3.0);
+        painter.rect_filled(inner, 3.0, color);
+        painter.rect_stroke(inner, 3.0, Stroke::new(1.0, p.border_strong), egui::StrokeKind::Inside);
+        if slash {
+            painter.line_segment([inner.left_bottom(), inner.right_top()], Stroke::new(1.2, p.text_muted));
+        }
+        if chosen {
+            painter.rect_stroke(rect.shrink(0.5), 4.0, Stroke::new(2.0, p.accent), egui::StrokeKind::Inside);
+        } else if r.hovered() {
+            painter.rect_stroke(rect.shrink(0.5), 4.0, Stroke::new(1.0, p.border_strong), egui::StrokeKind::Inside);
+        }
+    }
+    r
 }
 
 impl Layout {
@@ -44,6 +103,7 @@ pub(super) fn paint_gear(painter: &egui::Painter, rect: Rect, color: egui::Color
 impl App {
     pub(super) fn open_track_settings(&mut self, hit: Hit) {
         self.track_settings = self.key_of(hit);
+        self.look_draft = None;
     }
 
     /// The track the palette's "Track settings…" opens: the one last right-clicked or opened,
@@ -68,6 +128,19 @@ impl App {
             Hit::Variants(i) => self.variants[i].path.display().to_string(),
             Hit::Signal(i) => self.signals[i].path.display().to_string(),
         };
+        // The header bar's colour; the default swatch shows the theme's.
+        let theme_header = self.pal().header;
+        let default_name = match hit {
+            Hit::Track(i) => self.tracks[i].title(),
+            Hit::Genes(i) => format!("Genes  ·  {}", self.genes[i].file_name()),
+            Hit::Variants(i) => format!("Variants  ·  {}", self.variants[i].file_name()),
+            Hit::Signal(i) => format!("Signal  ·  {}", self.signals[i].file_name()),
+        };
+        let mut draft = match self.look_draft.take() {
+            Some(d) if d.key == key => d,
+            _ => LookDraft::of(&key, &self.arrangement),
+        };
+        let mut color = self.arrangement.colors.get(&key).copied();
         let mut open = true;
         let mut close = false;
         let mut run = None;
@@ -83,6 +156,69 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let p = theme::palette(ui);
                 ui.add(egui::Label::new(egui::RichText::new(&title).small().color(p.text_muted)).truncate()).on_hover_text(&title);
+                theme::menu_rule(ui);
+                ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.label("Name");
+                    let edit = ui.add(egui::TextEdit::singleline(&mut draft.name).hint_text(&default_name).desired_width(ui.available_width() - 8.0));
+                    edit.on_hover_text("The name in the track's header; empty for the file's name");
+                });
+                {
+                    let default = [theme_header.r(), theme_header.g(), theme_header.b()];
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui.label("Header color");
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(6.0);
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let [r, g, b] = default;
+                        if swatch(ui, egui::Color32::from_rgb(r, g, b), color.is_none() && !draft.custom, true).on_hover_text("Default").clicked() {
+                            color = None;
+                            draft.custom = false;
+                            draft.hex.clear();
+                        }
+                        for (name, c) in OKABE_ITO {
+                            let chosen = color == Some(c) && !draft.custom;
+                            if swatch(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), chosen, false).on_hover_text(format!("{name}  {}", arrange::hex(c))).clicked() {
+                                color = Some(c);
+                                draft.custom = false;
+                                draft.hex = arrange::hex(c);
+                            }
+                        }
+                        ui.add_space(4.0);
+                        if ui.selectable_label(draft.custom, "Custom").on_hover_text("A hex code or a color from the picker").clicked() {
+                            draft.custom = !draft.custom;
+                        }
+                    });
+                    if draft.custom {
+                        ui.horizontal(|ui| {
+                            ui.add_space(8.0);
+                            let mut rgb = color.unwrap_or(default);
+                            if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                                color = Some(rgb);
+                                draft.hex = arrange::hex(rgb);
+                            }
+                            let valid = draft.hex.trim().is_empty() || arrange::parse_hex(&draft.hex).is_some();
+                            let mut edit = egui::TextEdit::singleline(&mut draft.hex).hint_text("#rrggbb").desired_width(90.0).font(egui::TextStyle::Monospace);
+                            if !valid {
+                                edit = edit.text_color(egui::Color32::from_rgb(0xD5, 0x5E, 0x00));
+                            }
+                            if ui.add(edit).changed()
+                                && let Some(c) = arrange::parse_hex(&draft.hex)
+                            {
+                                color = Some(c);
+                            }
+                            if !valid {
+                                ui.label(egui::RichText::new("not a hex color").small().color(p.text_muted));
+                            }
+                        });
+                    }
+                }
+                ui.add_space(4.0);
+                ui.spacing_mut().item_spacing = Vec2::new(ui.spacing().item_spacing.x, 0.0);
                 let hint = |a: Action| a.keys().map(super::actions::keys_label);
                 if let Hit::Track(i) = hit {
                     theme::menu_rule(ui);
@@ -121,6 +257,16 @@ impl App {
                 }
             });
         self.style = style;
+        // The name and colour apply as they are typed and chosen.
+        match draft.name.trim() {
+            "" => self.arrangement.names.remove(&key),
+            n => self.arrangement.names.insert(key.clone(), n.to_owned()),
+        };
+        match color {
+            Some(c) => self.arrangement.colors.insert(key.clone(), c),
+            None => self.arrangement.colors.remove(&key),
+        };
+        self.look_draft = Some(draft);
         if let Some(a) = run {
             self.run(a, ctx);
         }
@@ -131,6 +277,7 @@ impl App {
         }
         if !open {
             self.track_settings = None;
+            self.look_draft = None;
         }
     }
 

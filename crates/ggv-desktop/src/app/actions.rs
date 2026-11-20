@@ -272,6 +272,15 @@ impl App {
         if self.palette.is_some() {
             return;
         }
+        // Escape first ends a drag on the ruler (no zoom) or the overview strip (back where it
+        // started).
+        if (self.zoom_drag.is_some() || self.overview_dragging()) && ctx.input_mut(|i| i.consume_key(NONE, Key::Escape)) {
+            if self.zoom_drag.take().is_some() {
+                self.zoom_drag_cancelled = true;
+            }
+            self.cancel_overview_drag();
+            return;
+        }
         if self.show_shortcuts && ctx.input_mut(|i| i.consume_key(NONE, Key::Escape)) {
             self.show_shortcuts = false;
             return;
@@ -300,6 +309,7 @@ impl App {
             self.show_about = false;
             self.assembly.show = false;
             self.track_settings = None;
+            self.look_draft = None;
             self.read_details = None;
             return;
         }
