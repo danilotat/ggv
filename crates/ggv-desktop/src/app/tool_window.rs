@@ -16,6 +16,8 @@ pub const TITLE_H: f32 = theme::CONTROL_H + 6.0;
 pub const MARGIN: i8 = 12;
 /// The space between a tool window's sections (rows of controls, a note, the results).
 pub const GAP: f32 = 8.0;
+/// The narrowest a tool window gets by default.
+pub const MIN_WIDTH: f32 = 280.0;
 /// The title's size: body text, one step up.
 const TITLE_SIZE: f32 = 14.5;
 
@@ -46,7 +48,7 @@ pub struct ToolWindow<'a> {
 
 impl<'a> ToolWindow<'a> {
     pub fn new(title: &'a str, id: Id) -> Self {
-        Self { title, id, spot: Spot::Auto, default_width: 420.0, min_width: 280.0, default_size: None, max_size: None, resizable: true, closable: true }
+        Self { title, id, spot: Spot::Auto, default_width: 420.0, min_width: MIN_WIDTH, default_size: None, max_size: None, resizable: true, closable: true }
     }
 
     /// Where it first opens (see [`super::inspector::placed`]): beside what it mustn't hide, once

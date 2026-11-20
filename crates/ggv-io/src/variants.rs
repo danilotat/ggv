@@ -75,7 +75,54 @@ pub struct Variant {
 /// bounded for files with huge annotations.
 const INFO_MAX: usize = 8000;
 
-/// An `##INFO` header line: its ID and Description.
+/// A record's columns as the file writes them, for showing values exactly as written (a BCF,
+/// which has no text, as HTSlib would write it). The parsed [`Variant`] reformats some: QUAL
+/// and floats are printed again, and only a few FORMAT keys are kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RawRecord {
+    pub chrom: String,
+    pub pos: String,
+    pub qual: String,
+    pub filter: String,
+    pub info: String,
+    /// The FORMAT keys, in order; empty when the file has no FORMAT column.
+    pub format: Vec<String>,
+    /// Each sample's values, split on `:`, in sample order. A sample may give fewer values than
+    /// there are keys (VCF lets trailing ones be dropped).
+    pub samples: Vec<Vec<String>>,
+}
+
+impl RawRecord {
+    /// The columns of a VCF data line (no line ending).
+    pub fn from_line(line: &str) -> Option<Self> {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 8 {
+            return None;
+        }
+        let format = cols.get(8).map(|f| f.split(':').map(str::to_owned).collect()).unwrap_or_default();
+        Some(Self {
+            chrom: cols[0].to_owned(),
+            pos: cols[1].to_owned(),
+            qual: cols[5].to_owned(),
+            filter: cols[6].to_owned(),
+            info: cols[7].to_owned(),
+            format,
+            samples: cols.iter().skip(9).map(|c| c.split(':').map(str::to_owned).collect()).collect(),
+        })
+    }
+
+    /// INFO as key/value pairs in file order (a flag's value empty); none for `.`.
+    pub fn info_pairs(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.info.split(';').filter(|kv| !kv.is_empty() && *kv != ".").map(|kv| kv.split_once('=').unwrap_or((kv, "")))
+    }
+}
+
+/// Whether VCF data line `cols` is `var`'s record: same POS, ID, REF and ALT.
+fn same_record(cols: &[&str], var: &Variant) -> bool {
+    cols.len() >= 5 && cols[1].parse::<u64>().ok() == Some(var.start + 1) && cols[2] == var.id && cols[3] == var.reference && cols[4] == var.alts.join(",")
+}
+
+/// An `##INFO` or `##FORMAT` header line: its ID and Description.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct InfoField {
     pub id: String,
@@ -323,13 +370,60 @@ impl VariantFile {
 
     /// The `##INFO` fields the header declares, in header order.
     pub fn info_fields(&self) -> Vec<InfoField> {
-        use pasta::variant::header::HeaderRecordType;
+        self.header_fields(pasta::variant::header::HeaderRecordType::Info)
+    }
+
+    /// The `##FORMAT` fields the header declares, in header order.
+    pub fn format_fields(&self) -> Vec<InfoField> {
+        self.header_fields(pasta::variant::header::HeaderRecordType::Format)
+    }
+
+    fn header_fields(&self, kind: pasta::variant::header::HeaderRecordType) -> Vec<InfoField> {
         let text = |b: &[u8]| String::from_utf8_lossy(b).trim_matches('"').to_owned();
         self.header
             .records()
-            .filter(|r| r.kind() == HeaderRecordType::Info)
+            .filter(|r| r.kind() == kind)
             .filter_map(|r| Some(InfoField { id: text(r.get(b"ID")?), description: r.get(b"Description").map(text).unwrap_or_default() }))
             .collect()
+    }
+
+    /// `var`'s record (read by [`Self::query`] on `contig`, any naming) as the file writes it:
+    /// the line itself for a VCF, HTSlib's text for a BCF. `None` when it isn't there.
+    pub fn raw_record(&mut self, contig: &str, var: &Variant) -> Result<Option<RawRecord>> {
+        let Some(contig) = self.contig_name(contig).map(str::to_owned) else { return Ok(None) };
+        let (beg, end) = (var.start as i64, var.start as i64 + 1);
+        let err = |e: std::io::Error| Error::Io { path: self.path.clone(), cause: e };
+        match &mut self.index {
+            IndexKind::Tabix(tbx) => {
+                let Some(tid) = tbx.name_to_id(contig.as_bytes()) else { return Ok(None) };
+                let Some(plan) = tbx.index.query(tid as usize, beg, end) else { return Ok(None) };
+                let mut q = Query::new(plan);
+                while self.reader.query_next_line(&mut q, tbx, &mut self.line).map_err(err)? {
+                    let line = String::from_utf8_lossy(&self.line);
+                    let line = line.trim_end_matches(['\n', '\r']);
+                    if same_record(&line.split('\t').take(5).collect::<Vec<_>>(), var) {
+                        return Ok(RawRecord::from_line(line));
+                    }
+                }
+            }
+            IndexKind::Csi(index) => {
+                let Some(tid) = self.header.contig_id(contig.as_bytes()) else { return Ok(None) };
+                let Some(plan) = index.query(tid as usize, beg, end) else { return Ok(None) };
+                let mut q = Query::new(plan);
+                while self.reader.query_next_bcf(&mut q, &self.header, &mut self.record).map_err(err)? {
+                    self.text.clear();
+                    if vcf::format_record(&self.header, &self.record, &mut self.text).is_err() {
+                        continue;
+                    }
+                    let line = String::from_utf8_lossy(&self.text);
+                    let line = line.trim_end_matches(['\n', '\r']);
+                    if same_record(&line.split('\t').take(5).collect::<Vec<_>>(), var) {
+                        return Ok(RawRecord::from_line(line));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// The `##contig` lines that give a length, in header order.
@@ -725,6 +819,34 @@ mod tests {
         assert_eq!(v[0].svlen_of(0), Some(100));
         assert_eq!(v[0].structural(50), Some(("INS", Some(100))));
         assert_eq!(v[1].alt_af, vec![Some(0.01), Some(0.9)]);
+    }
+
+    /// A clicked record's columns come back as the file writes them: every FORMAT key in order,
+    /// values unparsed (QUAL `21.1`, VAF `0.833333`, missing `.` kept), samples short of keys too.
+    #[test]
+    fn raw_records_are_as_written() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data");
+        let mut f = VariantFile::open(data.join("hg002-revio/HG002.revio.deepvariant.phased.vcf.gz")).unwrap();
+        let fields: Vec<String> = f.format_fields().into_iter().map(|x| x.id).collect();
+        assert!(fields.contains(&"VAF".to_owned()) && fields.contains(&"PS".to_owned()), "{fields:?}");
+        let region = Region { contig: "20".into(), start: 31_157_112, end: 31_157_113 };
+        let v = f.query(&region, false).unwrap().into_iter().next().unwrap();
+        let raw = f.raw_record("20", &v).unwrap().expect("found by any contig naming");
+        assert_eq!((raw.chrom.as_str(), raw.pos.as_str(), raw.qual.as_str(), raw.filter.as_str(), raw.info.as_str()), ("chr20", "31157113", "21.1", "PASS", "."));
+        assert_eq!(raw.format, ["GT", "GQ", "DP", "AD", "VAF", "PL", "PS"]);
+        assert_eq!(raw.samples, [["1|0", "13", "6", "1,5", "0.833333", "20,0,13", "31157113"]]);
+        assert_eq!(raw.info_pairs().count(), 0, "no INFO");
+
+        let mut f = VariantFile::open(data.join("fixtures/missing-fields.vcf.gz")).unwrap();
+        let v = f.query(&Region { contig: "chrQA".into(), start: 149, end: 150 }, false).unwrap().remove(0);
+        let raw = f.raw_record("chrQA", &v).unwrap().unwrap();
+        assert_eq!(raw.qual, ".");
+        assert_eq!(raw.samples, [["./.", ".", ".", "."], ["0/1", ".", ".", "5,."]]);
+        let other = Variant { id: "another".into(), ..v };
+        assert_eq!(f.raw_record("chrQA", &other).unwrap(), None, "only the same record");
+
+        let pairs: Vec<_> = RawRecord::from_line("c\t1\t.\tA\tG\t.\t.\tSVTYPE=INS;SOMATIC;END=5").unwrap().info_pairs().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+        assert_eq!(pairs, [("SVTYPE".into(), "INS".into()), ("SOMATIC".into(), String::new()), ("END".into(), "5".into())]);
     }
 
     #[test]

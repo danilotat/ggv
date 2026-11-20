@@ -59,6 +59,9 @@ pub struct Session {
     /// Variant tracks coloured other than their default: `af`, or an INFO key (`CLNSIG`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub variant_colors: std::collections::BTreeMap<PathBuf, String>,
+    /// Variant tracks showing only records whose FILTER is `PASS` (or `.`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants_pass_only: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bookmarks: Vec<crate::bookmarks::Bookmark>,
     /// Regions marked on the view, with labels.
@@ -309,6 +312,9 @@ impl Session {
         self.track_filters = std::mem::take(&mut self.track_filters).into_iter().map(|(p, e)| (f(&p), e)).collect();
         self.indexes = std::mem::take(&mut self.indexes).into_iter().map(|(p, i)| (f(&p), f(&i))).collect();
         self.variant_colors = std::mem::take(&mut self.variant_colors).into_iter().map(|(p, e)| (f(&p), e)).collect();
+        for p in &mut self.variants_pass_only {
+            *p = f(p);
+        }
         for t in &mut self.track_layout {
             t.path = f(&t.path);
         }

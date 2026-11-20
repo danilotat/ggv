@@ -675,6 +675,7 @@ impl App {
             .filter(|v| v.color != variants::SiteColor::default_for(&v.info_fields))
             .map(|v| (v.path.clone(), v.color.name().to_owned()))
             .collect();
+        s.variants_pass_only = self.variants.iter().filter(|v| v.sites == variants::Sites::Passing).map(|v| v.path.clone()).collect();
         if self.arrangement != arrange::Arrangement::default() {
             s.track_layout = self.arrangement.saved(&self.arrangement.ordered(&self.track_keys()));
         }
@@ -737,6 +738,9 @@ impl App {
         for v in &mut self.variants {
             if let Some(c) = s.variant_colors.get(&v.path) {
                 v.color = variants::SiteColor::parse(c);
+            }
+            if s.variants_pass_only.contains(&v.path) {
+                v.sites = variants::Sites::Passing;
             }
         }
         self.add_signals(s.signals.clone(), ctx);
@@ -903,8 +907,10 @@ impl App {
         } else {
             self.contigs[..=self.contig].iter().rev().map(pair).collect()
         };
-        // Stepping through the reviewed track stops where the review does.
+        // Stepping through the reviewed track stops where the review does; a track showing only
+        // PASS sites stops only at those.
         let sites = self.review.as_ref().filter(|_| self.review_track() == Some(i)).map_or(crate::variants::Sites::All, |r| r.sites);
+        let sites = if self.variants[i].sites == crate::variants::Sites::Passing { crate::variants::Sites::Passing } else { sites };
         self.variants[i].seek(contigs, from, forward, sites, &mut self.next_request_id);
     }
 

@@ -1328,7 +1328,7 @@ mod tests {
         let var = app.variants[0].current.as_ref().unwrap().variants.iter().find(|v| v.start == 58_903_751).cloned().unwrap();
         app.open_variant_popup(0, var);
         let want = app.popup_consequences();
-        assert!(want.iter().any(|l| l.contains("GNAS") && l.contains("p.Ile131=")), "{want:?}");
+        assert!(want.iter().map(|r| r.line()).any(|l| l.contains("GNAS") && l.contains("p.Ile131=")), "{want:?}");
         for place in ["chr20:50000000", "chr1:58903000-58904500"] {
             app.attach_goto(place).unwrap();
             settle_all(&mut app, |a| a.genes.iter().all(|g| g.built.as_ref().is_some_and(|b| b.contig == a.contigs[a.contig].name)));
@@ -1336,6 +1336,76 @@ mod tests {
             app.variant_popup.as_mut().unwrap().consequences = None;
             assert_eq!(app.popup_consequences(), want, "at {place}");
         }
+    }
+
+    /// "Hide variants without PASS" (right-click on a variant track) loads only the passing
+    /// records, is in the menu as a switch, and is saved with the session.
+    #[test]
+    fn variant_tracks_can_hide_records_without_pass() {
+        if !data_dir().join("HG002.revio.slices.bam").exists() {
+            return;
+        }
+        use crate::variants::Sites;
+        let ctx = egui::Context::default();
+        let mut app = gnas_window(&ctx, None);
+        let starts = |app: &App| app.variants[0].current.as_ref().unwrap().variants.iter().filter(|v| (58_858_000..58_861_000).contains(&v.start)).map(|v| v.start + 1).collect::<Vec<_>>();
+        app.attach_goto("chr20:58858000-58861000").unwrap();
+        settle_all(&mut app, |a| a.variants[0].current.as_ref().is_some_and(|c| c.region.start <= 58_858_000 && c.region.end >= 58_861_000));
+        assert_eq!(starts(&app), [58_859_005, 58_859_628, 58_859_981, 58_860_297, 58_860_477, 58_860_985]);
+
+        let m = super::super::context_menu::ContextMenu::new(app.contig, 58_859_000, None, Some(Hit::Variants(0)), egui::pos2(10.0, 10.0));
+        assert!(app.menu_entries(&m).concat().contains(&super::super::context_menu::Entry::PassOnly(0)));
+        app.variants[0].sites = Sites::Passing;
+        settle_all(&mut app, |a| a.variants[0].current.as_ref().is_some_and(|c| c.variants.iter().all(|v| v.is_pass())) && !a.variants[0].is_loading());
+        assert_eq!(starts(&app), [58_859_981, 58_860_477, 58_860_985], "RefCall records hidden");
+        assert_eq!(app.current_session().variants_pass_only, [data_dir().join("HG002.revio.deepvariant.phased.vcf.gz")]);
+
+        app.variants[0].sites = Sites::All;
+        settle_all(&mut app, |a| a.variants[0].current.as_ref().is_some_and(|c| c.variants.iter().any(|v| !v.is_pass())) && !a.variants[0].is_loading());
+        assert_eq!(starts(&app).len(), 6, "shown again");
+        assert!(app.current_session().variants_pass_only.is_empty());
+    }
+
+    /// The details window lays the record out from the file's own text (every FORMAT key, QUAL
+    /// as written), and "Copy as text" is what it was: the consequence lines as before, the
+    /// rest from the parsed record.
+    #[test]
+    fn variant_details_show_the_record_as_written() {
+        if !data_dir().join("HG002.revio.slices.bam").exists() {
+            return;
+        }
+        let ctx = egui::Context::default();
+        let mut app = gnas_window(&ctx, Some(data_dir().join("GRCh38.chr20.slices.fa.gz")));
+        let var = app.variants[0].current.as_ref().unwrap().variants.iter().find(|v| v.start == 58_903_751).cloned().unwrap();
+        // The consequence lines as the window wrote them before it had columns.
+        let before: Vec<String> = var
+            .alts
+            .iter()
+            .flat_map(|a| app.consequences("chr20", var.start, &var.reference, a).into_iter().take(6))
+            .map(|c| format!("{} {}  {}{}  {}", c.gene, c.transcript, c.hgvs_c, c.hgvs_p.map(|p| format!("  {p}")).unwrap_or_default(), c.effect))
+            .collect();
+        app.open_variant_popup_at(0, var, egui::pos2(300.0, 300.0));
+        let rows = app.popup_consequences();
+        assert_eq!(rows.iter().map(|r| r.line()).collect::<Vec<_>>(), before);
+
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0));
+        let t = std::time::Instant::now();
+        loop {
+            let raw = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(raw, |ui| app.variant_window(ui.ctx())).textures_delta.clear();
+            if matches!(&app.variant_popup.as_ref().unwrap().raw, super::super::variant_info::Raw::Read(_)) || t.elapsed().as_secs() > 30 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let p = app.variant_popup.as_ref().unwrap();
+        let super::super::variant_info::Raw::Read(Some(raw)) = &p.raw else { panic!("record read again") };
+        assert_eq!(raw.format, ["GT", "GQ", "DP", "AD", "VAF", "PL", "PS"]);
+        let text = app.variant_text(p, &before);
+        assert!(text.starts_with(&format!("chr20:58903752 . {} > {}  (HG002.revio.deepvariant.phased.vcf.gz)\n", p.var.reference, p.var.alts.join(","))), "{text}");
+        // Beside the click, not over it.
+        let rect = ctx.memory(|m| m.area_rect(app.variant_window_id())).unwrap();
+        assert!(rect.left() > 300.0, "{rect:?}");
     }
 
     /// The evidence panel names transcripts without UCSC's copy suffix, as consequences do.
