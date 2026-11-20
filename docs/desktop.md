@@ -17,6 +17,18 @@ Positional files are sorted by extension: `.bam`/`.cram` are alignment tracks, `
 variant tracks, `.gtf`/`.gff3`/`.bed` (optionally `.gz`) gene tracks; a trailing argument that is
 none of these is the locus.
 
+Above the ruler, a strip shows the whole chromosome with the view outlined on it: click it to
+centre the view there, or drag the outlined window to pan (Esc mid-drag puts the view back);
+both go into Back/Forward. It draws the chromosome's bands and centromere when it has a
+cytoband table, otherwise a plain bar. The built-in human and mouse genomes (hg38, hg19, mm39,
+mm10) come with UCSC's `cytoBand.txt.gz`: downloaded with the genome, or once in the background
+for a genome downloaded earlier or data recognised as that build, and only when small (under
+100 KB, as IGV does). hs1 (T2T) has its bands only as a bigBed, which GGV doesn't read yet;
+sacCer3 has none. For other genomes, open a UCSC `cytoBand.txt` (optionally `.gz`) with
+**Open** or by dropping it on the window, or keep one beside the reference as `cytoBand.txt` or
+`<reference name>.cytoBand.txt` (`hg38.2bit` → `hg38.cytoBand.txt.gz`). The ruler shows the
+view's width at its right end. In split view each pane has its own strip.
+
 Tracks stack below one shared ruler and reference row and share the locus and zoom. Each has
 its own coverage, read rows and vertical scroll. Add tracks with **Add BAM…** (several at once)
 and close one with the × in its header (or collapse it to the header with −). BAMs may name contigs differently (`chr17` vs `17`);
@@ -133,7 +145,9 @@ panel and consequences name the gene's best transcript at the base, as an agent'
 does. A transcript without introns shows its strand beside its name (`< SSA1`, `VPS8 >`). Hover
 for the transcript id, biotype, exon count, coding length, tags, and which exon (numbered in the
 direction of transcription) is under the pointer. Double-click a gene to fit it in the view. Type a gene name, gene id or transcript id
-(`BRCA1`, `ENSG00000012048`, `ENST00000357654.9`) in the locus box to jump to it. With no BAM
+(`BRCA1`, `ENSG00000012048`, `ENST00000357654.9`) in the locus box to jump to it; as you type a
+name, up to eight genes starting with it are listed below the box with their loci (↑/↓ and Enter,
+or click). A gene is shown with 10% of its length on each side. With no BAM
 open, an annotation alone defines the genome, and so does a VCF or BCF whose header gives its
 contigs' lengths.
 
@@ -331,11 +345,11 @@ every shortcut:
 | Do | How |
 |---|---|
 | Anything | Ctrl+K, type a few letters |
-| Go to a locus | Type in the locus box (Ctrl+L): `chr17`, `chr17:41,244,435` (a base, outlined) or `chr17:41,240,000-41,250,000` |
-| Zoom | Mouse wheel (around the pointer; over rows that don't all fit, the wheel scrolls them and Ctrl+wheel zooms), `+`/`−` (Ctrl+`+`/`−` scale the interface instead), double-click to zoom in (on a gene: fit the gene), or drag across the ruler or reference row to zoom to exactly what you mark |
+| Go to a locus | Type in the locus box (Ctrl+L): `chr17`, `chr17:41,244,435` (a base, outlined), `chr17:41,240,000-41,250,000`, or a gene name (suggestions as you type); or click the chromosome strip above the ruler |
+| Zoom | Mouse wheel (around the pointer; over rows that don't all fit, the wheel scrolls them and Ctrl+wheel zooms), `+`/`−` (Ctrl+`+`/`−` scale the interface instead), double-click to zoom in (on a gene: fit the gene), or drag across the ruler or reference row to zoom to exactly what you mark (Esc while dragging cancels) |
 | Show reads further out | Alt+= / Alt+− change the read window (the widest view that still shows reads, 50 kb by default) one size up or down, shown briefly in the top-right corner; also the toolbar's **Reads up to** menu |
 | Step through variants | **< Variant** / **Variant >**, Ctrl+B / Ctrl+F |
-| Pan | Drag on the tracks (horizontal: genome; vertical: read rows), arrow keys, trackpad sideways scroll |
+| Pan | Drag on the tracks (horizontal: genome; vertical: read rows), drag the outlined window on the chromosome strip, arrow keys, trackpad sideways scroll |
 | Scroll rows | Drag up/down in a track, or `↑`/`↓`, PageUp/PageDown over it |
 | Arrange tracks | Drag a track's header bar to move it (a blue line shows where it lands); drag the edge between two tracks to give one's height to the other, or into the room below the last track to move the track under it (the tracks further away stay put; a height you set is kept when zooming out hides the reads; the last track's bottom edge stops at the window's bottom), double-click an edge for the automatic height. The − in a header (or a double-click on the header) collapses the track to its header bar, keeping it open but out of the way; + opens it again at the height it had. Heights saved on a bigger screen shrink to fit. Saved with the session |
 | Inspect | Hover a read (name, span, strand, MAPQ, flags, mismatches, the base under the pointer) or a coverage column (depth and allele counts) |

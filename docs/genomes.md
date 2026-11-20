@@ -1,7 +1,8 @@
 # Genomes and built-in tracks
 
 Instead of finding a reference and a gene annotation, name a built-in genome; GGV downloads
-UCSC's `.2bit` and NCBI RefSeq genes once and keeps them:
+UCSC's `.2bit` and NCBI RefSeq genes once and keeps them (and, for hg38, hg19, mm39 and mm10,
+UCSC's chromosome bands, a few KB, for the desktop's chromosome strip):
 
 ```sh
 ggv-desktop sample.bam --genome hg38          # or Reference… → a genome in the app

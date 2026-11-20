@@ -10,6 +10,8 @@ pub enum Kind {
     Genes,
     Reference,
     Session,
+    /// Chromosome bands (UCSC `cytoBand.txt`), for the overview strip.
+    Cytobands,
 }
 
 pub fn kind_of(name: &str) -> Option<Kind> {
@@ -17,7 +19,9 @@ pub fn kind_of(name: &str) -> Option<Kind> {
     let name = if ggv_io::remote::is_remote(std::path::Path::new(name)) { ggv_io::remote::redact(name) } else { name };
     let lower = name.to_ascii_lowercase();
     let base = lower.trim_end_matches(".gz").trim_end_matches(".bgz");
-    if ggv_io::signal::is_signal(&lower) {
+    if ggv_io::cytoband::is_cytoband_name(&lower) {
+        Some(Kind::Cytobands)
+    } else if ggv_io::signal::is_signal(&lower) {
         Some(Kind::Signal)
     } else if base.ends_with(".bam") || base.ends_with(".cram") {
         Some(Kind::Alignments)
@@ -43,6 +47,7 @@ pub struct Sorted {
     pub signals: Vec<PathBuf>,
     pub reference: Option<PathBuf>,
     pub session: Option<PathBuf>,
+    pub cytobands: Option<PathBuf>,
     pub unknown: Vec<PathBuf>,
 }
 
@@ -56,6 +61,7 @@ pub fn sort(paths: impl IntoIterator<Item = PathBuf>) -> Sorted {
             Some(Kind::Signal) => out.signals.push(p),
             Some(Kind::Reference) => out.reference = Some(p),
             Some(Kind::Session) => out.session = Some(p),
+            Some(Kind::Cytobands) => out.cytobands = Some(p),
             None => out.unknown.push(p),
         }
     }
@@ -131,6 +137,7 @@ mod tests {
         assert_eq!(kind_of("genes.gff3.gz"), Some(Kind::Genes));
         assert_eq!(kind_of("hg38.fa.gz"), Some(Kind::Reference));
         assert_eq!(kind_of("review.ggv.json"), Some(Kind::Session));
+        assert_eq!(kind_of("hg38.cytoBand.txt.gz"), Some(Kind::Cytobands));
         assert_eq!(kind_of("chr1:100"), None);
     }
 

@@ -10,6 +10,8 @@ mod demo;
 mod dialogs;
 mod genome;
 mod inspector;
+mod locus_search;
+mod overview;
 mod palette;
 mod tool_window;
 mod tools;
@@ -84,6 +86,16 @@ fn sv_size(bp: u64) -> String {
         0..1000 => format!("{bp} bp"),
         1000..1_000_000 => format!("{:.1} kb", bp as f64 / 1000.0),
         _ => format!("{:.1} Mb", bp as f64 / 1e6),
+    }
+}
+
+/// The width of the view for the ruler: "250 bp", "31.4 kb", "250 kb", "1.2 Mb".
+fn span_text(bp: f64) -> String {
+    let unit = |v: f64, u: &str| if v < 99.95 { format!("{v:.1} {u}") } else { format!("{v:.0} {u}") };
+    match bp.round() {
+        b if b < 1000.0 => format!("{b} bp"),
+        b if b < 999_950.0 => unit(b / 1e3, "kb"),
+        b => unit(b / 1e6, "Mb"),
     }
 }
 
@@ -263,6 +275,12 @@ pub struct App {
     /// A drag on the ruler or reference row in progress: the base it started on and the base
     /// under the pointer. Zooms to what it marks on release.
     zoom_drag: Option<(u64, u64)>,
+    /// Esc ended a ruler drag: the rest of it (until the button is let go) neither zooms nor pans.
+    zoom_drag_cancelled: bool,
+    /// The chromosome overview strip above the ruler.
+    overview: overview::Overview,
+    /// Gene-name suggestions under the locus box.
+    locus_search: locus_search::LocusSearch,
     /// A sort requested on the command line, applied at the first outlined base.
     pending_sort: Option<ggv_layout::SortBy>,
     /// An outlined base from a session, applied once the genome is known.
@@ -516,6 +534,9 @@ impl App {
             selection: None,
             selecting: false,
             zoom_drag: None,
+            zoom_drag_cancelled: false,
+            overview: overview::Overview::default(),
+            locus_search: locus_search::LocusSearch::default(),
             pending_sort: args.sort,
             pending_highlight: args.highlight.clone(),
             cycle_start: None,
@@ -1477,7 +1498,12 @@ impl App {
         if self.contigs.is_empty() {
             return;
         }
-        let here = (self.contig, self.center, self.ppb);
+        self.remember((self.contig, self.center, self.ppb));
+    }
+
+    /// Records `here` (contig, centre, points per base) for Back: where a drag started, once it
+    /// has ended somewhere else.
+    fn remember(&mut self, here: (usize, f64, f64)) {
         let same = |p: &(usize, f64, f64)| p.0 == here.0 && (p.1 - here.1).abs() < 1.0 && (p.2 / here.2 - 1.0).abs() < 1e-6;
         if !self.back.last().is_some_and(same) {
             self.back.push(here);
@@ -1514,13 +1540,16 @@ impl App {
         if let Some(reference) = sorted.reference {
             self.set_reference(reference, ctx);
         }
+        if let Some(bands) = sorted.cytobands {
+            self.open_cytobands(bands);
+        }
         self.add_tracks(sorted.bams, ctx);
         self.add_variants(sorted.vcfs, ctx);
         self.add_genes(sorted.genes, ctx);
         self.add_signals(sorted.signals, ctx);
         if !sorted.unknown.is_empty() {
             let names: Vec<String> = sorted.unknown.iter().map(|p| crate::files::display_name(p)).collect();
-            self.error = Some(format!("Not a BAM/CRAM, VCF/BCF, GTF/GFF/BED, FASTA, bigWig/bedGraph/SEG or session: {}", names.join(", ")));
+            self.error = Some(format!("Not a BAM/CRAM, VCF/BCF, GTF/GFF/BED, FASTA, bigWig/bedGraph/SEG, cytoband table or session: {}", names.join(", ")));
         }
         let known: Vec<PathBuf> = paths.into_iter().filter(|p| ggv_io::remote::is_present(p) && crate::files::kind_of(&p.to_string_lossy()).is_some()).collect();
         crate::files::remember(&mut self.recent, &known);
@@ -1788,6 +1817,20 @@ impl App {
     /// naming no build, and those naming another build last. With an hg38 and an hg19 annotation
     /// both open on hg19 data, a gene went to the first one opened (GRCh38 coordinates).
     fn gene_hits(&self, text: &str) -> Vec<(usize, Region)> {
+        self.gene_spans(text).into_iter().map(|(i, r)| (i, self.pad_gene(r))).collect()
+    }
+
+    /// A gene's extent with room around it to jump to: 10% of its length on each side (at
+    /// least 50 bases), within the contig.
+    fn pad_gene(&self, r: Region) -> Region {
+        let len = self.contigs.iter().find(|c| c.name == r.contig).map_or(u64::MAX, |c| c.length);
+        let pad = (r.len() / 10).max(50);
+        Region { start: r.start.saturating_sub(pad), end: (r.end + pad).min(len), contig: r.contig }
+    }
+
+    /// Where gene `text` is (its whole extent) in each open annotation, best first; see
+    /// [`Self::gene_hits`].
+    fn gene_spans(&self, text: &str) -> Vec<(usize, Region)> {
         let build = self.build();
         let mut hits: Vec<(u8, usize, Region)> = Vec::new();
         for (i, g) in self.genes.iter().enumerate() {
@@ -1796,8 +1839,7 @@ impl App {
             let Some(contig) = self.contigs.iter().find(|c| c.name == span.contig || aliases.contains(&c.name)) else {
                 continue;
             };
-            let pad = ((span.end - span.start) / 20).max(50);
-            let region = Region { contig: contig.name.clone(), start: span.start.saturating_sub(pad), end: (span.end + pad).min(contig.length) };
+            let region = Region { contig: contig.name.clone(), start: span.start, end: span.end.min(contig.length) };
             let rank = match (build, annotation_build(&g.path)) {
                 (Some(b), Some(a)) if a == b => 0,
                 (_, None) => 1,
@@ -2562,6 +2604,9 @@ impl App {
 
             // Genomic coordinates: the locus box leads, a search field with its icon inside.
             let locus_w = fit.locus_w;
+            // Monospace: Figtree's digits are proportional, so coordinates would jitter as they
+            // change (see fonts.rs).
+            self.locus_keys(ui);
             let edit = ui.add(
                 egui::TextEdit::singleline(&mut self.locus_text).id_salt("locus")
                     .desired_width(locus_w)
@@ -2583,8 +2628,18 @@ impl App {
                 }
             }
             let submitted = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (fit.go && theme::primary(ui, "Go").on_hover_text("Go to the locus or gene (Enter)").clicked()) || submitted {
+            // A gene chosen from the suggestions (or typed whole) goes there with room around it;
+            // anything else goes to the locus parser as typed.
+            // (Enter first: the box has just lost focus, which closes the suggestions.)
+            let entered_gene = if submitted { self.locus_choice(&self.locus_text) } else { None };
+            let clicked_gene = self.locus_suggestions(ui, &edit);
+            if let Some(region) = clicked_gene.or(entered_gene) {
+                self.pending_goto = Some(region.to_string());
+                self.close_locus_suggestions();
+                ui.memory_mut(|m| m.surrender_focus(edit.id));
+            } else if (fit.go && theme::primary(ui, "Go").on_hover_text("Go to the locus or gene (Enter)").clicked()) || submitted {
                 self.pending_goto = Some(self.locus_text.clone());
+                self.close_locus_suggestions();
             }
             if !edit.has_focus()
                 && self.pending_goto.is_none()
@@ -3044,9 +3099,9 @@ impl App {
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
-        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-        self.width = rect.width().max(1.0);
-        self.canvas_rect = rect;
+        let (full, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        self.width = full.width().max(1.0);
+        self.canvas_rect = full;
         let ppp = ui.ctx().pixels_per_point();
         self.poll_genes();
         self.poll_signals();
@@ -3066,13 +3121,18 @@ impl App {
             self.highlight = Some((c, r.start));
         }
         if self.contigs.is_empty() {
-            self.welcome(ui, rect);
+            self.welcome(ui, full);
             if let Some(hint) = self.no_genome_hint() {
-                ui.painter().text(rect.center(), Align2::CENTER_CENTER, hint, FontId::proportional(13.0), self.pal().muted);
+                ui.painter().text(full.center(), Align2::CENTER_CENTER, hint, FontId::proportional(13.0), self.pal().muted);
             }
             return;
         }
 
+        // The chromosome overview on top (its own widget, over the canvas's, so it takes the
+        // pointer there); the ruler, reference and tracks in what is left below it.
+        let (strip, rect) = Self::split_overview(full);
+        let strip_response = ui.interact(strip, egui::Id::unique(("overview", self.reference_slot)), Sense::click_and_drag());
+        self.overview_input(ui, &strip_response, strip);
         let layout = self.layout(rect);
         self.handle_input(ui, &response, rect, &layout);
         if self.contigs.is_empty() {
@@ -3142,6 +3202,7 @@ impl App {
         }
         self.retired.extend(retire); // nothing painted this frame: free them next time
 
+        self.draw_overview(ui, &strip_response, strip);
         self.draw_shared_overlays(&painter, rect, vs, ve);
         for (i, section) in layout.sections.iter().enumerate() {
             if !section.is_positive() {
@@ -3523,6 +3584,14 @@ impl App {
         if self.row_bar_input(ui, response, layout) {
             return;
         }
+        // Esc ended a drag on the ruler: nothing more until the button is let go (or the rest of
+        // it would pan).
+        if self.zoom_drag_cancelled {
+            if response.drag_stopped() || !response.dragged() {
+                self.zoom_drag_cancelled = false;
+            }
+            return;
+        }
 
         // Drag pans: horizontally through the genome, vertically through the rows of the track
         // where the drag started.
@@ -3798,8 +3867,11 @@ impl App {
         let muted = self.pal().muted;
         let small = FontId::monospace(10.0);
 
-        // Ruler.
+        // Ruler, with the width of the view at its right end.
         let len = (ve - vs).max(1.0);
+        let span = painter.layout_no_wrap(span_text(len), FontId::proportional(11.0), muted);
+        let span_left = rect.right() - 6.0 - span.size().x;
+        painter.galley(Pos2::new(span_left, rect.top() + 9.0 - span.size().y / 2.0), span, muted);
         let label_w = 7.0 * commas(ve as u64).len() as f64 + 20.0;
         let mut step = nice_step(len / 10.0);
         while step as f64 * self.ppb < label_w {
@@ -3811,7 +3883,7 @@ impl App {
             painter.line_segment([Pos2::new(x, rect.top() + 16.0), Pos2::new(x, rect.top() + 24.0)], Stroke::new(1.0, muted));
             let label = commas(p);
             let half = 3.0 * label.len() as f32;
-            if x - half >= rect.left() && x + half <= rect.right() {
+            if x - half >= rect.left() && x + half <= span_left - 8.0 {
                 painter.text(Pos2::new(x, rect.top() + 9.0), Align2::CENTER_CENTER, label, small.clone(), text);
             }
             p += step;
@@ -3908,7 +3980,7 @@ impl App {
         }
         if unshown > 0 {
             let galley = painter.layout_no_wrap(format!("+{unshown} more (hover the ruler)"), FontId::proportional(10.0), self.pal().text);
-            let at = Pos2::new(rect.right() - galley.size().x - 8.0, rect.top() + 1.0);
+            let at = Pos2::new(span_left - galley.size().x - 14.0, rect.top() + 1.0);
             painter.rect_filled(Rect::from_min_size(at, galley.size() + Vec2::new(6.0, 3.0)), 3.0, self.pal().label_bg);
             painter.galley(at + Vec2::new(3.0, 1.5), galley, self.pal().text);
         }
@@ -5111,6 +5183,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn span_labels() {
+        let cases = [(250.0, "250 bp"), (999.4, "999 bp"), (1000.0, "1.0 kb"), (31_400.0, "31.4 kb"), (250_000.0, "250 kb"), (999_960.0, "1.0 Mb"), (1_200_000.0, "1.2 Mb"), (248_956_422.0, "249 Mb")];
+        for (bp, want) in cases {
+            assert_eq!(span_text(bp), want, "{bp}");
+        }
+    }
 
     #[test]
     fn sv_sizes() {
