@@ -26,7 +26,7 @@ pub use bam_file::{BamFile, BamInfo, ReadGroup};
 pub use error::{Error, Result};
 pub use indexing::{build_index, index_kind};
 pub use reference::ReferenceFasta;
-pub use variants::{GenotypeClass, InfoField, SampleCall, Variant, VariantFile, breakend_mate, is_breakend};
+pub use variants::{GenotypeClass, InfoField, RawRecord, SampleCall, Variant, VariantFile, breakend_mate, is_breakend};
 
 /// Re-exported so downstream crates use the exact pasta version ggv-io was built against.
 pub use pasta;

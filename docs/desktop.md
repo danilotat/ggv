@@ -127,11 +127,19 @@ with a TBI or CSI index, or BCF with CSI, through pasta's HTSlib-compatible engi
 the top, as in IGV: a site row (red for the alt allele fraction, from INFO/AF or the genotypes;
 faded when FILTER is not PASS) and a genotype row per sample (grey hom-ref, blue het, cyan
 hom-alt, pale no-call). Hover a site for position, type, REF/ALT, QUAL, FILTER, AF, genotype
-counts and INFO; hover a sample row for its GT, DP, GQ and AD. gVCF reference blocks
+counts and INFO; hover a sample row for its GT, DP, GQ and AD. Click a site for its details,
+in a window beside it: the alleles and type, position and file, ID, QUAL and FILTER; ClinVar's
+summary for ClinVar records; what it does to the genes open here (gene, transcript, HGVS,
+consequence in columns); a Samples table of every FORMAT key; and every INFO field. All
+values are exactly as the file writes them, and hovering a FORMAT or INFO key shows its header
+Description. **Copy as text** copies it. gVCF reference blocks
 (`<*>`/`<NON_REF>`) are skipped. **< Variant** / **Variant >** (or Ctrl+B / Ctrl+F, over the
 track to use) jump to the previous/next site from the outlined base, searching beyond what is
 loaded and on into the next (or previous) chromosomes, outlining the site and zooming to read
-level if the view is wide.
+level if the view is wide. Right-click a variant track for **Color sites** and **Hide variants
+without PASS**, a switch that shows only records whose FILTER is `PASS` (or `.`, no filters
+applied); the others are not drawn, hovered or stepped to. It is kept per file and saved with
+the session.
 
 **Gene tracks** (`-g`/`--genes`, or **Genes…**) read GTF, GFF3 or BED files, gzipped or not. They
 sit at the bottom, as in IGV: thick CDS, thin UTRs, introns with strand chevrons, and names

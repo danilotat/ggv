@@ -100,6 +100,8 @@ pub(super) enum Entry {
     CopyPosition,
     Bookmark,
     TrackSettings,
+    /// A variant track's switch: show only records whose FILTER is `PASS` (or `.`).
+    PassOnly(usize),
 }
 
 impl Entry {
@@ -112,7 +114,7 @@ impl Entry {
             Entry::CopyPosition => Some(Action::CopyPosition),
             Entry::TrackSettings => Some(Action::TrackSettings),
             Entry::SortBase => Some(Action::Sort(SortBy::Base)),
-            Entry::Open(_) => None,
+            Entry::Open(_) | Entry::PassOnly(_) => None,
         }
     }
 }
@@ -185,7 +187,7 @@ impl App {
         if let Some(Hit::Variants(i)) = m.hit
             && i < self.variants.len()
         {
-            groups.push(vec![Entry::Open(Sub::Sites(i))]);
+            groups.push(vec![Entry::Open(Sub::Sites(i)), Entry::PassOnly(i)]);
         }
         let mut utils = vec![Entry::CopyPosition, Entry::Bookmark];
         if m.hit.is_some() {
@@ -219,6 +221,7 @@ impl App {
             Entry::CopyPosition => "Copy position".into(),
             Entry::Bookmark => "Bookmark position".into(),
             Entry::TrackSettings => "Track settings…".into(),
+            Entry::PassOnly(_) => "Hide variants without PASS".into(),
         }
     }
 
@@ -297,6 +300,13 @@ impl App {
                 if let Some(hit) = m.hit {
                     self.open_track_settings(hit);
                 }
+            }
+            Entry::PassOnly(i) => {
+                if let Some(v) = self.variants.get_mut(i) {
+                    use crate::variants::Sites;
+                    v.sites = if v.sites == Sites::Passing { Sites::All } else { Sites::Passing };
+                }
+                return true;
             }
         }
         false
@@ -562,11 +572,13 @@ impl App {
         painter.text(pos2(rect.left() + 8.0, y), Align2::LEFT_CENTER, &label, FontId::proportional(13.0), p.text);
         let mut right = rect.right() - 8.0;
         match e {
-            Entry::Toggle(t) => {
-                let on = match t {
-                    Toggle::SoftClips => self.style.soft_clips,
-                    Toggle::LinkSplits => self.style.link_splits,
-                    Toggle::ViewPairs => self.style.view_pairs,
+            Entry::Toggle(_) | Entry::PassOnly(_) => {
+                let on = match e {
+                    Entry::Toggle(Toggle::SoftClips) => self.style.soft_clips,
+                    Entry::Toggle(Toggle::LinkSplits) => self.style.link_splits,
+                    Entry::Toggle(Toggle::ViewPairs) => self.style.view_pairs,
+                    Entry::PassOnly(i) => self.variants.get(i).is_some_and(|v| v.sites == crate::variants::Sites::Passing),
+                    _ => false,
                 };
                 let sw = Rect::from_center_size(pos2(right - theme::SWITCH.x / 2.0, y), theme::SWITCH);
                 theme::paint_switch(painter, sw, on, p);

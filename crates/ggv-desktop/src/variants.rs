@@ -9,7 +9,7 @@ use std::{
 };
 
 use eframe::egui;
-use ggv_io::{GenotypeClass, InfoField, Variant, VariantFile};
+use ggv_io::{GenotypeClass, InfoField, RawRecord, Variant, VariantFile};
 use ggv_model::Region;
 
 use crate::{
@@ -187,14 +187,17 @@ pub fn info_rgb_in(key: &str, value: Option<&str>, dark: bool) -> [u8; 3] {
 }
 
 enum Request {
-    Load { id: u64, region: Region, color: SiteColor, dark: bool },
+    Load { id: u64, region: Region, color: SiteColor, dark: bool, sites: Sites },
     /// Find the nearest variant strictly after (or before) `pos` on the first contig, then on
     /// each following contig in order (in the search direction).
     Seek { id: u64, contigs: Vec<(String, u64)>, pos: u64, forward: bool, sites: Sites },
+    /// A record's columns as the file writes them (for the variant details window), answered
+    /// on `reply` rather than as a [`Reply`].
+    Raw { contig: String, var: Box<Variant>, reply: mpsc::Sender<Option<RawRecord>> },
 }
 
 enum Reply {
-    Loaded { id: u64, region: Region, variants: Arc<Vec<Variant>>, packed: Packed, instances: Arc<Vec<Instance>>, color: SiteColor, sv: Arc<Vec<Option<(&'static str, Option<u64>)>>>, legend: Vec<(String, [u8; 3])>, dark: bool },
+    Loaded { id: u64, region: Region, variants: Arc<Vec<Variant>>, packed: Packed, instances: Arc<Vec<Instance>>, color: SiteColor, sv: Arc<Vec<Option<(&'static str, Option<u64>)>>>, legend: Vec<(String, [u8; 3])>, dark: bool, sites: Sites },
     Found { id: u64, hit: Option<(String, u64, u64)> },
     Failed(String),
 }
@@ -211,6 +214,8 @@ pub struct Loaded {
     /// What the instances were coloured by, and for which theme.
     color: SiteColor,
     dark: bool,
+    /// Which records were kept.
+    sites: Sites,
     /// Each variant's structural type and size (`Variant::structural`), worked out once per
     /// load rather than every frame.
     pub sv: Arc<Vec<Option<(&'static str, Option<u64>)>>>,
@@ -224,7 +229,12 @@ pub struct VariantTrack {
     pub samples: Vec<String>,
     /// The header's INFO fields with their descriptions.
     pub info_fields: Arc<Vec<InfoField>>,
+    /// The header's FORMAT fields with their descriptions.
+    pub format_fields: Arc<Vec<InfoField>>,
     pub color: SiteColor,
+    /// Which records are shown: all, or only those that passed the caller's filters (the
+    /// right-click menu's "Hide variants without PASS"). The others aren't loaded.
+    pub sites: Sites,
     /// Colours for the dark theme (set by the pane each frame; a change recolours).
     pub dark: bool,
     /// The header's contig lengths and declared assembly, for checking it matches the rest.
@@ -233,7 +243,7 @@ pub struct VariantTrack {
     tx: mpsc::Sender<Request>,
     rx: mpsc::Receiver<Reply>,
     pub current: Option<Loaded>,
-    requested: Option<(u64, Region)>,
+    requested: Option<(u64, Region, Sites)>,
     seeking: Option<u64>,
     pub scroll_y: f32,
     pub error: Option<String>,
@@ -244,6 +254,7 @@ impl VariantTrack {
         let file = VariantFile::open(&path)?;
         let samples = file.samples().to_vec();
         let info_fields = Arc::new(file.info_fields());
+        let format_fields = Arc::new(file.format_fields());
         let color = SiteColor::default_for(&info_fields);
         let header_contigs = file.header_contigs();
         let declared_assembly = file.declared_assembly();
@@ -254,24 +265,31 @@ impl VariantTrack {
         thread::Builder::new().name("ggv-variants".into()).spawn(move || {
             let mut file = file;
             while let Ok(mut req) = worker_rx.recv() {
-                // Loads may be superseded; seeks never are (the user asked for each one).
+                // Loads may be superseded; seeks and record reads never are (the user asked for
+                // each one).
                 if matches!(req, Request::Load { .. }) {
                     while let Ok(newer) = worker_rx.try_recv() {
                         req = newer;
-                        if matches!(req, Request::Seek { .. }) {
+                        if !matches!(req, Request::Load { .. }) {
                             break;
                         }
                     }
                 }
                 let reply = match req {
-                    Request::Load { id, region, color, dark } => {
+                    Request::Raw { contig, var, reply } => {
+                        let _ = reply.send(file.raw_record(&contig, &var).ok().flatten());
+                        ctx.request_repaint();
+                        continue;
+                    }
+                    Request::Load { id, region, color, dark, sites } => {
                         match file.query(&region, false) {
-                            Ok(v) => {
+                            Ok(mut v) => {
+                                v.retain(|x| sites.has(x));
                                 let packed = pack(&v);
                                 let instances = Arc::new(build(&v, &packed, n, region.start, &color, dark));
                                 let sv = Arc::new(v.iter().map(|x| x.structural(50)).collect());
                                 let legend = legend_of(&color, &v, dark);
-                                Reply::Loaded { id, region, variants: Arc::new(v), packed, instances, color, sv, legend, dark }
+                                Reply::Loaded { id, region, variants: Arc::new(v), packed, instances, color, sv, legend, dark, sites }
                             }
                             Err(e) => Reply::Failed(e.to_string()),
                         }
@@ -287,11 +305,18 @@ impl VariantTrack {
                 ctx.request_repaint();
             }
         })?;
-        Ok(Self { id, path, samples, info_fields, color, dark: false, header_contigs, declared_assembly, tx, rx, current: None, requested: None, seeking: None, scroll_y: 0.0, error: None })
+        Ok(Self { id, path, samples, info_fields, format_fields, color, sites: Sites::All, dark: false, header_contigs, declared_assembly, tx, rx, current: None, requested: None, seeking: None, scroll_y: 0.0, error: None })
     }
 
     pub fn file_name(&self) -> String {
         self.path.file_name().unwrap_or_default().to_string_lossy().into_owned()
+    }
+
+    /// Reads `var`'s record on `contig` as the file writes it, on the loader thread.
+    pub fn read_raw(&self, contig: &str, var: &Variant) -> mpsc::Receiver<Option<RawRecord>> {
+        let (reply, rx) = mpsc::channel();
+        let _ = self.tx.send(Request::Raw { contig: contig.to_owned(), var: Box::new(var.clone()), reply });
+        rx
     }
 
     /// A next/previous-site search is under way.
@@ -333,7 +358,8 @@ impl VariantTrack {
         let covers = |r: &Region| {
             r.contig == contig && r.start as f64 <= vs.max(0.0) && r.end as f64 >= ve.min(contig_len as f64) && ((r.end - r.start) as f64) <= max_span
         };
-        if self.current.as_ref().is_some_and(|c| covers(&c.region)) || self.requested.as_ref().is_some_and(|(_, r)| covers(r)) {
+        // Loaded (or asked for) with other sites shown: loaded again.
+        if self.current.as_ref().is_some_and(|c| c.sites == self.sites && covers(&c.region)) || self.requested.as_ref().is_some_and(|(_, r, sites)| *sites == self.sites && covers(r)) {
             return;
         }
         let half = ((ve - vs) * 1.5).max(MIN_SPAN / 2.0);
@@ -343,8 +369,8 @@ impl VariantTrack {
         let region = Region { contig: contig.to_owned(), start, end };
         let id = *next_id;
         *next_id += 1;
-        let _ = self.tx.send(Request::Load { id, region: region.clone(), color: self.color.clone(), dark: self.dark });
-        self.requested = Some((id, region));
+        let _ = self.tx.send(Request::Load { id, region: region.clone(), color: self.color.clone(), dark: self.dark, sites: self.sites });
+        self.requested = Some((id, region, self.sites));
     }
 
     /// `contigs`: the current contig first, then the ones to continue into, in order.
@@ -361,8 +387,8 @@ impl VariantTrack {
         let mut found = None;
         for reply in self.rx.try_iter().collect::<Vec<_>>() {
             match reply {
-                Reply::Loaded { id, region, variants, packed, instances, color, sv, legend, dark } => {
-                    if self.requested.as_ref().is_some_and(|(r, _)| *r == id) {
+                Reply::Loaded { id, region, variants, packed, instances, color, sv, legend, dark, sites } => {
+                    if self.requested.as_ref().is_some_and(|(r, _, _)| *r == id) {
                         self.requested = None;
                     }
                     *generation += 1;
@@ -375,6 +401,7 @@ impl VariantTrack {
                         instances: InstanceSet { generation: *generation, instances },
                         color,
                         dark,
+                        sites,
                         sv,
                         legend,
                     });
