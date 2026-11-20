@@ -35,7 +35,10 @@ header when a file lacks the contig.
   inside the window. Everything in it is also in the command palette (Ctrl+K), acting at the
   outlined base (or the view centre).
 - **Track settings** (the gear in each track header, or **Track settings…** in the menu):
-  **Squish** and **Splice junctions**, **Filter reads in this track…**, **Copy view as FASTA**
+  **Name** (shown in the header instead of the file name; clear it to go back), **Header color**
+  for the bar the name is on (the eight Okabe–Ito colors, readable with color-vision
+  deficiencies, or **Custom**: a `#rrggbb` code or the color picker; the text turns white on dark
+  colors), **Squish** and **Splice junctions**, **Filter reads in this track…**, **Copy view as FASTA**
   (or the selection), **Copy selected reads as SAM**, **Copy view image**, and **Move track up /
   down**, **Collapse / Expand track** and **Close track**.
 
@@ -75,7 +78,7 @@ header when a file lacks the contig.
   track up / down** and **Close track**.
 
 **Sessions** (**Session** menu): **Save as…** writes the open files, view, outlined base,
-display options and every split pane (with whether they are linked) to a small JSON file;
+display options, track names and colors, and every split pane (with whether they are linked) to a small JSON file;
 **Open…** restores one; the window is also saved every 20 seconds while it changes and on exit,
 and comes back with **Restore last session** or `ggv-desktop --restore` (`--session FILE` opens a
 saved one). Saving never leaves a half-written file: each save goes to a temporary file that

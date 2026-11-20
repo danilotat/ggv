@@ -249,6 +249,8 @@ pub struct App {
     menu_track: Option<arrange::Key>,
     /// The track whose settings panel is open.
     track_settings: Option<arrange::Key>,
+    /// The track settings' name and colour fields while open (see `track_settings::LookDraft`).
+    look_draft: Option<track_settings::LookDraft>,
     /// The read whose details window is open.
     read_details: Option<track_settings::ReadDetails>,
     /// The clicked read's name: every alignment with it is outlined (mate, split parts).
@@ -507,6 +509,7 @@ impl App {
             ctx_menu: None,
             menu_track: None,
             track_settings: None,
+            look_draft: None,
             read_details: None,
             selected_read: args.select_read.clone(),
             variant_popup: None,
@@ -1257,11 +1260,12 @@ impl App {
 
         // Exact pileup per alignment track.
         let mut copy: Option<String> = None;
-        for t in &self.tracks {
+        for (i, t) in self.tracks.iter().enumerate() {
             ui.separator();
+            let title = self.alignment_title(i);
             ui.horizontal(|ui| {
                 let name = ui
-                    .add(egui::Label::new(egui::RichText::new(t.title()).strong()).sense(egui::Sense::click()))
+                    .add(egui::Label::new(egui::RichText::new(title).strong()).sense(egui::Sense::click()))
                     .on_hover_text(format!("{}\nsample: {}\n{}\nclick to copy", t.file_name(), t.label(), t.loader.bam_path.display()));
                 if name.clicked() {
                     copy = Some(t.full_title());
@@ -1374,7 +1378,8 @@ impl App {
         let tracks: Vec<(String, Option<(u64, Option<Result<ggv_query::RegionSummary, String>>)>)> = self
             .tracks
             .iter()
-            .map(|t| (t.title(), t.summary.clone()))
+            .enumerate()
+            .map(|(i, t)| (self.alignment_title(i), t.summary.clone()))
             .collect();
         ui.label(egui::RichText::new(format!("{contig}:{}-{}  ({} bp)", commas(start + 1), commas(end), commas(end - start))).strong());
         // The selected bases: the reference's, or each sample's own (from its reads).
@@ -3202,11 +3207,17 @@ impl App {
                 let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
                 return Some(if collapsed { "Expand track" } else { "Collapse track to its header (or double-click the header)" }.to_owned());
             }
-            (pos.y < section.top() + HEADER_H && !Layout::close_button(section).contains(pos)).then(|| match hit {
-                Hit::Track(i) => self.tracks[i].full_title(),
-                Hit::Genes(i) => self.genes[i].path.display().to_string(),
-                Hit::Variants(i) => self.variants[i].path.display().to_string(),
-                Hit::Signal(i) => self.signals[i].path.display().to_string(),
+            (pos.y < section.top() + HEADER_H && !Layout::close_button(section).contains(pos)).then(|| {
+                let file = match hit {
+                    Hit::Track(i) => self.tracks[i].full_title(),
+                    Hit::Genes(i) => self.genes[i].path.display().to_string(),
+                    Hit::Variants(i) => self.variants[i].path.display().to_string(),
+                    Hit::Signal(i) => self.signals[i].path.display().to_string(),
+                };
+                match self.custom_name(hit) {
+                    Some(name) => format!("{name}\n{file}"),
+                    None => file,
+                }
             })
         });
         let on_bar = response.hover_pos().and_then(|p| self.rows_under(&layout, p).filter(|(_, rs)| rs.bar_hit().contains(p)));
@@ -3236,9 +3247,9 @@ impl App {
     /// A track header's title, shortened with an ellipsis to end before the close button (a long
     /// name ran underneath it). The full name is on the header's hover.
     /// It ends before `right` (what [`Self::header_rows`] leaves).
-    fn header_title(&self, painter: &egui::Painter, section: Rect, text: String, right: f32) -> Rect {
+    fn header_title(&self, painter: &egui::Painter, section: Rect, hit: Hit, text: String, right: f32) -> Rect {
         let font = FontId::new(13.5, crate::fonts::medium());
-        let color = self.pal().text;
+        let color = self.header_ink(hit).text;
         let room = (right - (section.left() + 4.0)).max(0.0);
         let mut galley = painter.layout_no_wrap(text.clone(), font.clone(), color);
         if galley.size().x > room {
@@ -3259,27 +3270,29 @@ impl App {
     /// track) and close.
     fn header_buttons(&self, painter: &egui::Painter, section: Rect, hit: Hit) {
         let collapsed = self.key_of(hit).is_some_and(|k| self.arrangement.collapsed.contains(&k));
-        track_settings::paint_gear(painter, Layout::gear_button(section), self.pal().icon);
+        let icon = self.header_ink(hit).icon;
+        track_settings::paint_gear(painter, Layout::gear_button(section), icon);
         let fold = Layout::collapse_button(section);
-        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(19.0), self.pal().icon);
+        painter.text(fold.center(), Align2::CENTER_CENTER, if collapsed { "+" } else { "−" }, FontId::proportional(19.0), icon);
         let close = Layout::close_button(section);
-        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(19.0), self.pal().icon);
+        painter.text(close.center(), Align2::CENTER_CENTER, "×", FontId::proportional(19.0), icon);
     }
 
     /// When a track's rows don't all fit: "rows 1–41 of 377" at the right of its header, before
     /// the grip. Returns where the title must end.
-    fn header_rows(&self, painter: &egui::Painter, section: Rect, rows: Option<RowScroll>) -> f32 {
+    fn header_rows(&self, painter: &egui::Painter, section: Rect, hit: Hit) -> f32 {
         let end = Layout::grip(section).left() - 6.0;
-        let Some(rs) = rows else { return end };
+        let Some(rs) = self.row_scroll(hit, section) else { return end };
+        let muted = self.header_ink(hit).muted;
         let (a, b) = rs.shown();
         let text = format!("{} {}–{} of {}", rs.noun, commas(a as u64), commas(b as u64), commas(rs.rows as u64));
-        let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), self.pal().muted);
+        let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), muted);
         let w = galley.size().x;
         // Only with room left for a title.
         if end - w < section.left() + 120.0 {
             return end;
         }
-        painter.galley(Pos2::new(end - w, section.top() + HEADER_H / 2.0 - galley.size().y / 2.0), galley, self.pal().muted);
+        painter.galley(Pos2::new(end - w, section.top() + HEADER_H / 2.0 - galley.size().y / 2.0), galley, muted);
         end - w - 12.0
     }
 
@@ -3483,6 +3496,7 @@ impl App {
         {
             if let Some(key) = track_settings::gear_at(layout, p) {
                 self.track_settings = Some(key);
+                self.look_draft = None;
                 return;
             }
             if let Some((key, _)) = layout.collapse_at(p) {
@@ -3980,12 +3994,9 @@ impl App {
 
         // Header: name, state, close button.
         painter.hline(section.x_range(), top + 0.5, Stroke::new(1.0, self.pal().rule_strong));
-        painter.rect_filled(
-            Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)),
-            0.0,
-            self.pal().header,
-        );
-        let mut header = t.title();
+        let ink = self.header_ink(Hit::Track(i));
+        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, ink.fill);
+        let mut header = self.alignment_title(i);
         if let Some(e) = t.current.as_ref().and_then(|c| c.style.filter.expr) {
             header.push_str(&format!("  ·  filter: {}", crate::expr::text(e)));
         }
@@ -4002,8 +4013,8 @@ impl App {
         } else if let Some(e) = &t.error {
             header.push_str(&format!("  ·  error: {e}"));
         }
-        let right = self.header_rows(painter, section, self.row_scroll(Hit::Track(i), section));
-        self.header_title(painter, section, header, right);
+        let right = self.header_rows(painter, section, Hit::Track(i));
+        self.header_title(painter, section, Hit::Track(i), header, right);
         self.header_buttons(painter, section, Hit::Track(i));
 
         let Some(cur) = &t.current else { return };
@@ -4260,10 +4271,10 @@ impl App {
         painter.rect_filled(
             Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)),
             0.0,
-            self.pal().header,
+            self.header_ink(Hit::Genes(i)).fill,
         );
-        let right = self.header_rows(painter, section, self.row_scroll(Hit::Genes(i), section));
-        self.header_title(painter, section, self.gene_header(i), right);
+        let right = self.header_rows(painter, section, Hit::Genes(i));
+        self.header_title(painter, section, Hit::Genes(i), self.gene_header(i), right);
         self.header_buttons(painter, section, Hit::Genes(i));
 
         let Some(built) = &g.built else { return };
@@ -4367,13 +4378,11 @@ impl App {
         format!("No main transcript here  ·  {others} of {}{more} (All transcripts shows them; Evidence names the best)", genes[..genes.len().min(NAMED)].join(", "))
     }
 
-    /// Gene track `i`'s header: what is in view (as variant tracks say), then the file's counts.
+    /// Gene track `i`'s header: its name, and only while loading or failed, that.
     fn gene_header(&self, i: usize) -> String {
         let g = &self.genes[i];
-        match self.genes_in_view(i) {
-            Some(n) => format!("Genes  ·  {}  ·  {} in view  ·  {}", g.file_name(), commas(n as u64), g.status()),
-            None => format!("Genes  ·  {}  ·  {}", g.file_name(), g.status()),
-        }
+        let name = self.custom_name(Hit::Genes(i)).map_or_else(|| format!("Genes  ·  {}", g.file_name()), str::to_owned);
+        if g.annotation().is_some() { name } else { format!("{name}  ·  {}", g.status()) }
     }
 
     /// The transcript under `pos` in gene track `i`, with its row.
@@ -4488,7 +4497,7 @@ impl App {
         let s = &self.signals[i];
         let top = section.top();
         painter.hline(section.x_range(), top + 0.5, Stroke::new(1.0, self.pal().rule_strong));
-        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, self.pal().header);
+        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, self.header_ink(Hit::Signal(i)).fill);
         let n = section.width().max(1.0) as usize;
         let body = Rect::from_min_max(Pos2::new(section.left(), top + HEADER_H + 2.0), Pos2::new(section.right(), section.bottom() - 2.0));
         let mut state = if let Some(e) = &s.error {
@@ -4526,7 +4535,8 @@ impl App {
                 state = if cols.iter().all(Option::is_none) { "no values here".to_owned() } else { format!("range {} – {}", fmt_value(lo), fmt_value(hi)) };
             }
         }
-        self.header_title(painter, section, format!("Signal  ·  {}  ·  {state}", s.file_name()), Layout::grip(section).left() - 6.0);
+        let name = self.custom_name(Hit::Signal(i)).map_or_else(|| format!("Signal  ·  {}", s.file_name()), str::to_owned);
+        self.header_title(painter, section, Hit::Signal(i), format!("{name}  ·  {state}"), Layout::grip(section).left() - 6.0);
         self.header_buttons(painter, section, Hit::Signal(i));
     }
 
@@ -4548,29 +4558,19 @@ impl App {
         let v = &self.variants[i];
         let top = section.top();
         painter.hline(section.x_range(), top + 0.5, Stroke::new(1.0, self.pal().rule_strong));
-        painter.rect_filled(
-            Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)),
-            0.0,
-            self.pal().header,
-        );
+        let ink = self.header_ink(Hit::Variants(i));
+        painter.rect_filled(Rect::from_min_size(Pos2::new(section.left(), top + 1.0), Vec2::new(section.width(), HEADER_H - 1.0)), 0.0, ink.fill);
+        // Just the name, and why nothing shows when it doesn't (an error, too wide, loading).
+        let name = self.custom_name(Hit::Variants(i)).map_or_else(|| format!("Variants  ·  {}", v.file_name()), str::to_owned);
         let state = if let Some(e) = &v.error {
-            format!("error: {e}")
+            Some(format!("error: {e}"))
         } else if ve - vs > variants::VARIANT_WINDOW as f64 {
-            "zoom in to see variants (view wider than 10 Mb)".to_owned()
-        } else if let Some(cur) = &v.current {
-            let shown = cur.variants.iter().filter(|x| (x.end as f64) > vs && (x.start as f64) < ve).count();
-            let more = if cur.overflow > 0 { format!(" · {} overlapping in the last row", commas(cur.overflow as u64)) } else { String::new() };
-            format!("{} in view · loaded {} in {:.0} ms{more}", commas(shown as u64), commas(cur.variants.len() as u64), cur.elapsed.as_secs_f64() * 1000.0)
+            Some("zoom in to see variants (view wider than 10 Mb)".to_owned())
         } else {
-            "loading…".to_owned()
+            v.current.is_none().then(|| "loading…".to_owned())
         };
-        let right = self.header_rows(painter, section, self.row_scroll(Hit::Variants(i), section));
-        let title = self.header_title(
-            painter,
-            section,
-            format!("Variants  ·  {}  ·  {} sample{}  ·  {state}", v.file_name(), v.samples.len(), if v.samples.len() == 1 { "" } else { "s" }),
-            right,
-        );
+        let right = self.header_rows(painter, section, Hit::Variants(i));
+        let title = self.header_title(painter, section, Hit::Variants(i), state.map_or_else(|| name.clone(), |st| format!("{name}  ·  {st}")), right);
         // What the site colours mean, after the title while it fits; nothing (not a bare
         // "CLNSIG:") when no loaded record has the field.
         let legend = v.legend(6);
@@ -4580,19 +4580,19 @@ impl App {
             let font = FontId::proportional(12.0);
             let cy = top + HEADER_H / 2.0;
             let mut x = title.right() + 14.0;
-            let galley = painter.layout_no_wrap(format!("{key}:"), font.clone(), self.pal().text);
+            let galley = painter.layout_no_wrap(format!("{key}:"), font.clone(), ink.text);
             if x + galley.size().x < right - 2.0 {
                 let w = galley.size().x;
-                painter.galley(Pos2::new(x, cy - galley.size().y / 2.0), galley, self.pal().text);
+                painter.galley(Pos2::new(x, cy - galley.size().y / 2.0), galley, ink.text);
                 x += w + 6.0;
                 for (label, [r, g, b]) in legend {
-                    let galley = painter.layout_no_wrap(label, font.clone(), self.pal().text);
+                    let galley = painter.layout_no_wrap(label, font.clone(), ink.text);
                     if x + 14.0 + galley.size().x > right - 2.0 {
                         break;
                     }
                     painter.rect_filled(Rect::from_center_size(Pos2::new(x + 5.0, cy), Vec2::splat(10.0)), 1.0, Color32::from_rgb(r, g, b));
                     let w = galley.size().x;
-                    painter.galley(Pos2::new(x + 14.0, cy - galley.size().y / 2.0), galley, self.pal().text);
+                    painter.galley(Pos2::new(x + 14.0, cy - galley.size().y / 2.0), galley, ink.text);
                     x += 14.0 + w + 10.0;
                 }
             }

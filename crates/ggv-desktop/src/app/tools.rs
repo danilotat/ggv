@@ -328,8 +328,8 @@ impl App {
         }
 
         // Pileup at the base, per track.
-        for t in &self.tracks {
-            let mut s = Section { heading: t.title(), ..Default::default() };
+        for (i, t) in self.tracks.iter().enumerate() {
+            let mut s = Section { heading: self.alignment_title(i), ..Default::default() };
             match t.evidence.as_ref().filter(|e| e.pos == pos) {
                 Some(ev) if ev.stats.is_some() => {
                     let st = ev.stats.as_ref().expect("checked");
@@ -1642,7 +1642,7 @@ impl App {
         let sites = self.diff_sites();
         let (vs, ve) = self.visible();
         let in_view = sites.as_ref().map_or(0, |s| s.iter().filter(|x| (x.pos as f64) >= vs && (x.pos as f64) < ve).count());
-        let names: Vec<String> = self.tracks.iter().map(|t| t.title()).collect();
+        let names: Vec<String> = (0..self.tracks.len()).map(|i| self.alignment_title(i)).collect();
         let has_reference = self.reference_path.is_some();
         let reads_level = ve - vs <= super::read_window() as f64;
         let mut open = true;

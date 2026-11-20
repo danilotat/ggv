@@ -300,6 +300,7 @@ impl App {
             self.show_about = false;
             self.assembly.show = false;
             self.track_settings = None;
+            self.look_draft = None;
             self.read_details = None;
             return;
         }

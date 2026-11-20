@@ -1711,7 +1711,7 @@ mod tests {
         assert!(app.shown_variants(0).is_none(), "on another contig");
     }
 
-    /// A gene track with nothing in view says what is in view, as the other tracks do.
+    /// A gene track counts what is in view (for "No genes here"); its header is just its name.
     #[test]
     fn the_gene_track_says_what_is_in_view() {
         if !data_dir().join("HG002.revio.slices.bam").exists() {
@@ -1720,11 +1720,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = gnas_window(&ctx, None);
         assert!(app.genes_in_view(0).is_some_and(|n| n > 0));
-        assert!(app.gene_header(0).contains(" in view"), "{}", app.gene_header(0));
+        assert_eq!(app.gene_header(0), format!("Genes  ·  {}", app.genes[0].file_name()));
         app.attach_goto("chr20:31165000-31184000").unwrap();
         settle_all(&mut app, |a| a.genes[0].built.as_ref().is_some_and(|b| b.start <= 31_165_000 && b.end >= 31_184_000));
         assert_eq!(app.genes_in_view(0), Some(0));
-        assert!(app.gene_header(0).contains("·  0 in view  ·"), "{}", app.gene_header(0));
     }
 
     /// One frame of `draw` in a `w` × 900 window, as the window draws it.
