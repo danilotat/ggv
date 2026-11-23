@@ -175,7 +175,7 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
 
 **Working faster:**
 
-- **Open a URL** (**Open > URL…**, or the palette): a BAM, CRAM, FASTA, 2bit, bigWig or annotation
+- **Open a URL** (**Open > URL…**, or the palette): a BAM, CRAM, VCF/BCF, FASTA, 2bit, bigWig or annotation
   at an `https://`, `s3://` or `gs://` address, read by byte range as in IGV (see [the command
   line](cli.md#files-at-a-url-s3-gcs-https)). Give the index's URL too when it isn't next to the
   file (a presigned URL); sessions remember it. On the command line, URLs go where paths do

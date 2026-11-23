@@ -58,7 +58,7 @@ A REF or ALT over 60 bases (a structural variant written out) is given as its fi
 length, with `ref_length` / `alt_lengths` beside it.
 
 Files can be URLs (`https://`, `s3://`, `gs://`, presigned URLs too), on the command line or in
-any call. BAM, CRAM, FASTA, 2bit and bigWig are read by byte range (see [the command
+any call. BAM, CRAM, VCF/BCF, FASTA, 2bit and bigWig are read by byte range (see [the command
 line](cli.md#files-at-a-url-s3-gcs-https)). `open` takes `index` for the one BAM/CRAM it opens
 when its index isn't next to it, and `ggv mcp --index FILE` does the same for `-b` files. By
 default, URLs that resolve to loopback, private or link-local addresses are refused, so an agent
