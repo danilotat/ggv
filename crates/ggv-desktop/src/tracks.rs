@@ -196,7 +196,7 @@ impl Style {
     }
 
     pub fn pack_options(&self) -> PackOptions {
-        PackOptions { max_rows: 10_000, min_gap: 2, group: self.group, sort: self.sort, link: self.link_splits, pairs: self.view_pairs, clips: self.soft_clips }
+        PackOptions { max_rows: 10_000, min_gap: 2, group: self.group, sort: self.sort, link: self.link_splits, pairs: self.view_pairs, clips: self.soft_clips, contig_names: None }
     }
 }
 
@@ -315,7 +315,7 @@ pub fn filtered(view: &ViewData, style: Style) -> Vec<usize> {
 pub fn pack(view: &ViewData, style: Style) -> Packed {
     view.reads
         .as_ref()
-        .map(|(reads, _)| ggv_layout::pack_indices(reads, filtered(view, style), &style.pack_options()))
+        .map(|(reads, _)| ggv_layout::pack_indices(reads, filtered(view, style), &PackOptions { contig_names: Some(view.contig_names.clone()), ..style.pack_options() }))
         .unwrap_or_default()
 }
 
@@ -324,7 +324,7 @@ pub fn pack(view: &ViewData, style: Style) -> Packed {
 pub fn pack_sticky(view: &ViewData, style: Style, hints: &ggv_layout::RowHints) -> Packed {
     view.reads
         .as_ref()
-        .map(|(reads, _)| ggv_layout::pack_sticky(reads, filtered(view, style), &style.pack_options(), hints))
+        .map(|(reads, _)| ggv_layout::pack_sticky(reads, filtered(view, style), &PackOptions { contig_names: Some(view.contig_names.clone()), ..style.pack_options() }, hints))
         .unwrap_or_default()
 }
 

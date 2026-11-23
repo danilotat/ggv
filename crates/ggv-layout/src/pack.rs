@@ -43,6 +43,10 @@ pub enum GroupBy {
     /// The value of this tag (`CB`, `PS`, `UB`...): the reads must be loaded with it
     /// (`ViewOptions::tag`). Reads without it come last.
     Tag([u8; 2]),
+    /// The contig the mate maps to (IGV's "chromosome of mate"): the read's own contig first,
+    /// then the others in header order, then reads whose mate is unmapped, then unpaired reads.
+    /// Named from [`PackOptions::contig_names`].
+    MateContig,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -59,7 +63,7 @@ pub enum SortBy {
     InsertSize,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize)]
 pub struct PackOptions {
     pub max_rows: usize,
     pub min_gap: u64,
@@ -76,6 +80,10 @@ pub struct PackOptions {
     /// Soft clips are drawn: reads take their clipped bases' room too, so clips never cover
     /// a neighbour.
     pub clips: bool,
+    /// The alignment file's contig names in header order ([`crate::ViewData::contig_names`]),
+    /// which [`crate::Mate::contig_id`] indexes: the labels of [`GroupBy::MateContig`].
+    #[serde(skip)]
+    pub contig_names: Option<std::sync::Arc<[Box<str>]>>,
 }
 
 /// The reference span a read takes in a row: its aligned span, widened by its soft clips when
@@ -91,7 +99,7 @@ pub fn extent(r: &AlignedRead, clips: bool) -> (u64, u64) {
 /// Packs reads (in coordinate order, as a BAM query returns them) into at most `max_rows`
 /// rows, leaving at least `min_gap` bases between neighbours.
 pub fn pack(reads: &[AlignedRead], max_rows: usize, min_gap: u64) -> Packed {
-    pack_with(reads, &PackOptions { max_rows, min_gap, group: GroupBy::None, sort: None, link: false, pairs: false, clips: false })
+    pack_with(reads, &PackOptions { max_rows, min_gap, ..Default::default() })
 }
 
 /// Whether `a` and `b` are parts of one split read: same name, same mate (first / second).
@@ -241,7 +249,7 @@ pub fn pack_indices(reads: &[AlignedRead], mut order: Vec<usize>, opts: &PackOpt
             sort_rows(reads, &mut rows, pos, by);
         }
         if grouped {
-            let mut label = key.label();
+            let mut label = key.label(opts.contig_names.as_deref());
             if let (Some(p), GroupKey::Phase(rank)) = (&phasing, &key) {
                 label = match (rank, p.sites.len()) {
                     (2, 0) => "no het sites found (they need a reference)".into(),
@@ -295,11 +303,20 @@ enum GroupKey {
     BaseAt(u8, u8),
     /// 0 = phase A, 1 = phase B, 2 = unassigned.
     Phase(u8),
+    /// `(rank, contig id)`: 0 = mate on the read's contig, 1 = on another, 2 = mate unmapped,
+    /// 3 = not paired.
+    MateContig(u8, i32),
 }
 
 impl GroupKey {
-    fn label(&self) -> String {
+    fn label(&self, contig_names: Option<&[Box<str>]>) -> String {
         match self {
+            Self::MateContig(r @ (0 | 1), id) => {
+                let name = usize::try_from(*id).ok().and_then(|i| contig_names?.get(i)).map_or_else(|| format!("contig #{id}"), |n| n.to_string());
+                if *r == 0 { format!("mate on {name} (same)") } else { format!("mate on {name}") }
+            }
+            Self::MateContig(2, _) => "mate unmapped".into(),
+            Self::MateContig(..) => "not paired".into(),
             Self::Tag(t, true, _, _) => format!("no {}", String::from_utf8_lossy(t)),
             Self::Tag(t, false, _, v) => format!("{}: {v}", String::from_utf8_lossy(t)),
             Self::All => String::new(),
@@ -327,6 +344,12 @@ fn group_key(r: &AlignedRead, by: GroupBy) -> GroupKey {
         GroupBy::Strand => GroupKey::Strand(r.reverse),
         GroupBy::Haplotype => GroupKey::Haplotype(r.haplotype.is_none(), r.haplotype.unwrap_or(0)),
         GroupBy::ReadGroup => GroupKey::ReadGroup(r.read_group.is_none(), r.read_group.clone().unwrap_or_default()),
+        GroupBy::MateContig => match r.mate {
+            Some(m) if m.same_contig => GroupKey::MateContig(0, m.contig_id),
+            Some(m) => GroupKey::MateContig(1, m.contig_id),
+            None if r.flags & 0x1 != 0 => GroupKey::MateContig(2, 0),
+            None => GroupKey::MateContig(3, 0),
+        },
         GroupBy::Tag(t) => {
             let v = r.tag.clone().unwrap_or_default();
             GroupKey::Tag(t, r.tag.is_none(), v.parse().unwrap_or(i64::MAX), v)
@@ -418,6 +441,28 @@ mod tests {
             tag: None,
             bases: None,
         }
+    }
+
+    /// Chromosome of mate: the read's own contig first, others in header order (named from
+    /// the header), then mate unmapped, then unpaired.
+    #[test]
+    fn groups_by_the_mates_contig() {
+        use crate::Mate;
+        let mate = |same, id| Some(Mate { same_contig: same, contig_id: id, pos: 0, reverse: false });
+        let mut reads: Vec<AlignedRead> = (0..6).map(|i| read(i * 20, i * 20 + 10)).collect();
+        reads[0].mate = mate(false, 2);
+        reads[1].mate = mate(true, 0);
+        reads[2].flags = 0x1 | 0x8; // paired, mate unmapped
+        reads[3].mate = mate(false, 1);
+        reads[4].mate = mate(true, 0);
+        // reads[5]: not paired
+        let names: std::sync::Arc<[Box<str>]> = ["chr1", "chr5", "chrX"].map(Box::from).into();
+        let p = pack_with(&reads, &PackOptions { contig_names: Some(names), ..opts(GroupBy::MateContig, None) });
+        let groups: Vec<(&str, usize)> = p.groups.iter().map(|g| (g.label.as_str(), g.reads)).collect();
+        assert_eq!(groups, [("mate on chr1 (same)", 2), ("mate on chr5", 1), ("mate on chrX", 1), ("mate unmapped", 1), ("not paired", 1)]);
+        // Without the header's names the contig is still told apart.
+        let p = pack_with(&reads, &opts(GroupBy::MateContig, None));
+        assert_eq!(p.groups[1].label, "mate on contig #1");
     }
 
     #[test]
@@ -527,7 +572,7 @@ mod tests {
     }
 
     fn opts(group: GroupBy, sort: Option<(u64, SortBy)>) -> PackOptions {
-        PackOptions { max_rows: 100, min_gap: 2, group, sort, link: false, pairs: false, clips: false }
+        PackOptions { max_rows: 100, min_gap: 2, group, sort, ..Default::default() }
     }
 
     #[test]
@@ -597,8 +642,9 @@ mod tests {
 /// Re-packs a loaded view's reads with grouping and sorting (views load ungrouped), keeping
 /// the same row budget.
 pub fn repack(view: &mut crate::ViewData, max_rows: usize, group: GroupBy, sort: Option<(u64, SortBy)>, link: bool, pairs: bool) {
+    let contig_names = Some(view.contig_names.clone());
     if let Some((reads, packed)) = &mut view.reads {
-        *packed = pack_with(reads, &PackOptions { max_rows, min_gap: 2, group, sort, link, pairs, clips: false });
+        *packed = pack_with(reads, &PackOptions { max_rows, min_gap: 2, group, sort, link, pairs, clips: false, contig_names });
     }
 }
 

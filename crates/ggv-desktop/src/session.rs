@@ -159,6 +159,7 @@ pub fn group_name(g: GroupBy) -> &'static str {
         GroupBy::BaseAt(_) => "base",
         GroupBy::Alleles => "alleles",
         GroupBy::Tag(_) => "tag",
+        GroupBy::MateContig => "chromosome of mate",
     }
 }
 
@@ -189,7 +190,7 @@ pub(crate) fn parse_group(s: &str, pos: Option<u64>) -> GroupBy {
     if s == "base" {
         return pos.and_then(|p| p.checked_sub(1)).map_or(GroupBy::None, GroupBy::BaseAt);
     }
-    [GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles].into_iter().find(|g| group_name(*g) == s).unwrap_or_default()
+    [GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles, GroupBy::MateContig].into_iter().find(|g| group_name(*g) == s).unwrap_or_default()
 }
 
 pub(crate) fn parse_sort(s: &str) -> Option<SortBy> {

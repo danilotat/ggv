@@ -131,7 +131,7 @@ pub(super) enum Opt {
 }
 
 const SORTS: [SortBy; 5] = [SortBy::Base, SortBy::Strand, SortBy::MappingQuality, SortBy::Start, SortBy::InsertSize];
-const GROUPS: [GroupBy; 5] = [GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles];
+const GROUPS: [GroupBy; 6] = [GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles, GroupBy::MateContig];
 const COLORS: [ColorBy; 5] = [ColorBy::None, ColorBy::Strand, ColorBy::Haplotype, ColorBy::InsertSize, ColorBy::BaseMods];
 
 /// `s` with its first letter capitalised ("MAPQ" stays).

@@ -104,7 +104,7 @@ impl Action {
         v.extend([SortBy::Base, SortBy::Strand, SortBy::MappingQuality, SortBy::Start, SortBy::InsertSize].map(Sort));
         v.push(ClearSort);
         v.extend([ColorBy::None, ColorBy::Strand, ColorBy::Haplotype, ColorBy::InsertSize, ColorBy::BaseMods].map(Color));
-        v.extend([GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles].map(Group));
+        v.extend([GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles, GroupBy::MateContig].map(Group));
         v.push(GroupBaseHere);
         v.extend([CoverageScale::View, CoverageScale::Loaded, CoverageScale::Log].map(Scale));
         v.extend([Split, ClosePane, LinkPanes, ClearSelection, OpenDemo, About, Assembly]);

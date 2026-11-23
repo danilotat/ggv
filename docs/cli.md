@@ -65,7 +65,8 @@ ggv render hifi.bam chr20:58888000-58890000 -f ref.fa --color-by base-mods -o me
 `--color-by` takes `strand`, `haplotype` (HP tag), `insert-size` (pair orientation and insert
 size) or `base-mods` (5mC and other MM/ML calls, red likely modified, blue not), with the app's
 colours. `--group` puts reads in labelled bands as the app does: `strand`, `haplotype`,
-`read-group`, `alleles` (phased from the reads' own alleles) or, for a single base, `base`;
+`read-group`, `alleles` (phased from the reads' own alleles), `mate-chrom` (the chromosome each
+read's mate maps to) or, for a single base, `base`;
 `--sort` orders them by what they show at a single base. `--pairs` puts each pair's mates on
 one row joined across the insert (IGV's "view as pairs"), and `--link` each split read's parts.
 `--color-by base-mods --group haplotype` shows allele-specific methylation (imprinting) at a

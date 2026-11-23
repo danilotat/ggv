@@ -111,6 +111,9 @@ pub struct ViewData {
     /// Reads that passed the filters but were left out by downsampling (counted in coverage
     /// and `read_counts`, not in `reads`).
     pub reads_left_out: u64,
+    /// The alignment file's contig names in header order, which [`Mate::contig_id`] indexes
+    /// (for naming a mate's contig); empty without reads.
+    pub contig_names: std::sync::Arc<[Box<str>]>,
 }
 
 /// The fixed fields of an encoded BAM record (without `block_size`) needed for depth.
@@ -249,6 +252,7 @@ pub fn load_view(
             label,
             downsampled,
             reads_left_out,
+            contig_names: bam.contigs().iter().map(|c| c.name.as_str().into()).collect(),
         });
     }
 
@@ -269,7 +273,7 @@ pub fn load_view(
         None => Coverage::Unavailable,
     };
 
-    Ok(ViewData { region: region.clone(), reference, coverage, reads: None, read_counts: counts, label, downsampled: Vec::new(), reads_left_out: 0 })
+    Ok(ViewData { region: region.clone(), reference, coverage, reads: None, read_counts: counts, label, downsampled: Vec::new(), reads_left_out: 0, contig_names: Default::default() })
 }
 
 /// One chunk of a read-level load.

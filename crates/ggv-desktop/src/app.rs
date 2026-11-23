@@ -2164,7 +2164,7 @@ impl App {
         let region = ggv_model::Region { contig: contig.name.clone(), start: vs.saturating_sub(width), end: (ve + width).min(contig.length) };
         let Some((_, reader)) = &mut self.own_reference else { return };
         let Ok(seq) = reader.fetch(&region) else { return };
-        let view = ViewData { region, reference: Some(seq), coverage: ggv_layout::Coverage::Unavailable, reads: None, read_counts: Default::default(), label: String::new(), downsampled: Vec::new(), reads_left_out: 0 };
+        let view = ViewData { region, reference: Some(seq), coverage: ggv_layout::Coverage::Unavailable, reads: None, read_counts: Default::default(), label: String::new(), downsampled: Vec::new(), reads_left_out: 0, contig_names: Default::default() };
         self.generation += 1;
         let set = InstanceSet { generation: self.generation, instances: Arc::new(crate::tracks::build_reference(&view)) };
         self.reference = Some((Arc::new(view), set, (OWN, self.generation)));
@@ -5008,7 +5008,7 @@ fn tag_row(ui: &mut egui::Ui, selected: bool, tag: &mut String) -> Option<[u8; 2
 /// Grouping choices; "base" groups at `pos` (the outlined or clicked base).
 fn group_options(ui: &mut egui::Ui, value: &mut ggv_layout::GroupBy, pos: u64, tag: &mut String) {
     use ggv_layout::GroupBy;
-    for g in [GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles] {
+    for g in [GroupBy::None, GroupBy::Strand, GroupBy::Haplotype, GroupBy::ReadGroup, GroupBy::Alleles, GroupBy::MateContig] {
         ui.selectable_value(value, g, group_name(g));
     }
     ui.selectable_value(value, GroupBy::BaseAt(pos), format!("base at {}", commas(pos + 1)));

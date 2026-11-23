@@ -237,7 +237,8 @@ struct RenderArgs {
     #[arg(long, value_enum, default_value_t = ColorByArg::None)]
     color_by: ColorByArg,
     /// Group reads into bands, as the app does: by strand, HP tag, read group, the alleles
-    /// reads carry at heterozygous sites, or (for a single-base locus) the base each read shows.
+    /// reads carry at heterozygous sites, the chromosome of each read's mate, or (for a
+    /// single-base locus) the base each read shows.
     #[arg(long, value_enum, default_value_t = GroupArg::None)]
     group: GroupArg,
     /// Put each split read's parts (primary and supplementary) on one row, joined.
@@ -277,6 +278,8 @@ enum GroupArg {
     Base,
     /// By the value of `--tag`.
     Tag,
+    /// The chromosome each read's mate maps to.
+    MateChrom,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -322,6 +325,7 @@ fn group_of(g: GroupArg, base: Option<u64>, tag: Option<[u8; 2]>) -> Result<ggv_
         GroupArg::Haplotype => GroupBy::Haplotype,
         GroupArg::ReadGroup => GroupBy::ReadGroup,
         GroupArg::Alleles => GroupBy::Alleles,
+        GroupArg::MateChrom => GroupBy::MateContig,
         GroupArg::Base => GroupBy::BaseAt(base.ok_or_else(|| anyhow::anyhow!("--group base needs a single-base locus"))?),
     })
 }
