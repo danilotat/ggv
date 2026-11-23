@@ -739,11 +739,13 @@ mod tests {
         command(&mut shell, &ctx, &tx, "link", link).0.unwrap();
         assert_eq!(shell.panes[0].current_session().bams, vec![PathBuf::from(&url)]);
 
-        // goto alone; VCF at a URL isn't read yet.
+        // goto alone; a VCF at a URL opens like a local one.
         command(&mut shell, &ctx, &tx, "link", json!({"locus": "chr20:31185000-31186000"})).0.unwrap();
         assert!(shell.panes[0].current_session().locus.unwrap().starts_with("chr20:31185"));
-        let vcf = json!({"files": [{"file": format!("{base}/HG002.revio.pbsv.vcf.gz")}], "merge": true});
-        assert!(command(&mut shell, &ctx, &tx, "link", vcf).0.unwrap_err().contains("VCF/BCF can't be read from a URL yet"));
+        let vcf_url = format!("{base}/HG002.revio.pbsv.vcf.gz");
+        let vcf = json!({"files": [{"file": vcf_url}], "merge": true});
+        command(&mut shell, &ctx, &tx, "link", vcf).0.unwrap();
+        assert_eq!(shell.panes[0].current_session().vcfs, vec![PathBuf::from(&vcf_url)]);
         let _ = std::fs::remove_dir_all(elsewhere);
     }
 

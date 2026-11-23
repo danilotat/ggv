@@ -22,7 +22,7 @@ ggv index sample.bam calls.vcf.gz ref.fa     # --force builds one again
 
 ## Files at a URL (S3, GCS, HTTPS)
 
-BAM, CRAM, FASTA, 2bit and bigWig files can be read straight from an `https://`, `http://`,
+BAM, CRAM, VCF/BCF, FASTA, 2bit and bigWig files can be read straight from an `https://`, `http://`,
 `s3://` or `gs://` address, as IGV does: GGV fetches only the byte ranges a query needs, never
 the whole file. The 1000 Genomes CRAMs on S3 work as given, with the reference they were aligned
 to (also on S3, FASTA with its `.fai`):
@@ -36,9 +36,12 @@ ggv info s3://1000genomes/data/NA21144/alignment/NA21144.alt_bwamem_GRCh38DH.201
 ```
 
 - The index is looked for where it would be next to a local file (`x.bam.bai`, `x.bam.csi`,
-  `x.bai`; `x.cram.crai`, `x.crai`; for a FASTA `x.fa.fai`, plus `x.fa.gz.gzi` when bgzipped).
+  `x.bai`; `x.cram.crai`, `x.crai`; `x.vcf.gz.tbi`, `x.vcf.gz.csi`; `x.bcf.csi`; for a FASTA
+  `x.fa.fai`, plus `x.fa.gz.gzi` when bgzipped). A VCF at a URL must be bgzipped and indexed
+  (a BCF with its CSI), as a local one.
   When it lives somewhere else, as with a presigned URL, give it with `--index` (repeat it
-  for several alignment files, in the same order). `ggv index` can't write next to a remote file.
+  for several alignment files, in the same order; a VCF's index elsewhere is given in the app's
+  Open URL dialog). `ggv index` can't write next to a remote file.
 - `s3://bucket/key` reads the bucket's public HTTPS address. `AWS_REGION` picks the regional
   endpoint, and `AWS_ENDPOINT_URL` points at an S3-compatible server. `gs://bucket/key` reads
   `https://storage.googleapis.com/bucket/key`. Presigned URLs work as they are; their query string
@@ -50,7 +53,7 @@ ggv info s3://1000genomes/data/NA21144/alignment/NA21144.alt_bwamem_GRCh38DH.201
   that changes on the server while it is open is reported as an error, never read as a mix of
   the two versions.
 - Gene annotations (GTF, GFF3, BED) and bedGraph/SEG text at a URL are downloaded whole, since
-  they have no index. VCF/BCF can't be read from a URL yet.
+  they have no index.
 
 ```sh
 ggv render sample.bam chr7:55,191,822 -f ref.fa -o snv.png            # ±50 bp, base outlined

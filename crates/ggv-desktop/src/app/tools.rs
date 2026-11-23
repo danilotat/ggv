@@ -814,14 +814,14 @@ impl App {
             .anchored(Align2::CENTER_CENTER, Vec2::ZERO)
             .default_width(520.0)
             .show(ctx, &mut open, |ui| {
-                ui.label("BAM, CRAM, FASTA, 2bit, bigWig or annotation at an https://, s3:// or gs:// address (public or presigned). Only the parts you look at are fetched.");
+                ui.label("BAM, CRAM, VCF/BCF, FASTA, 2bit, bigWig or annotation at an https://, s3:// or gs:// address (public or presigned). Only the parts you look at are fetched.");
                 ui.add_space(4.0);
                 ui.label("File URL");
                 let edit = ui.add(egui::TextEdit::singleline(&mut form.url).desired_width(520.0).hint_text("https://… or s3://bucket/path/sample.cram"));
                 if ui.memory_mut(|m| m.data.remove_temp::<bool>(egui::Id::unique("open-url-focus")).unwrap_or(false)) {
                     edit.request_focus();
                 }
-                ui.label("Index URL (optional: when it isn't the file's URL plus .bai/.csi/.crai)");
+                ui.label("Index URL (optional: when it isn't the file's URL plus .bai/.csi/.crai/.tbi)");
                 let index = ui.add(egui::TextEdit::singleline(&mut form.index).desired_width(520.0));
                 let enter = (edit.lost_focus() || index.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if let Some(e) = &form.error {
@@ -836,12 +836,10 @@ impl App {
                 Some("Not a URL: give an https://, http://, s3:// or gs:// address (local files: Open > Alignments…)".into())
             } else if !index.is_empty() && !ggv_io::remote::is_remote(std::path::Path::new(&index)) && !std::path::Path::new(&index).exists() {
                 Some("The index is neither a URL nor a file here".into())
-            } else if !index.is_empty() && kind != Some(crate::files::Kind::Alignments) {
-                Some("An index URL is for BAM or CRAM files".into())
+            } else if !index.is_empty() && !matches!(kind, Some(crate::files::Kind::Alignments | crate::files::Kind::Variants)) {
+                Some("An index URL is for BAM, CRAM, VCF or BCF files".into())
             } else if kind.is_none() {
                 Some("The URL's name doesn't say what it is (.bam, .cram, .fa, .2bit, .bw, .gtf…)".into())
-            } else if matches!(kind, Some(crate::files::Kind::Variants)) {
-                Some("VCF/BCF can't be read from a URL yet; download it with its index".into())
             } else {
                 None
             };

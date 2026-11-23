@@ -8,11 +8,14 @@ use pasta::variant::{
     Header, Record, Unpack,
     encoding::{INT32_MISSING, INT32_VECTOR_END},
     index::{Index, IndexFormat, locate, tabix::Tabix},
-    io::{InputFormat, Query, Reader},
+    io::{InputFormat, Reader},
     vcf,
 };
 
 use crate::{Error, Result};
+
+mod input;
+use input::{Input, RemoteInput};
 
 /// A sample's genotype, simplified for display.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -299,7 +302,7 @@ enum IndexKind {
 
 pub struct VariantFile {
     path: PathBuf,
-    reader: Reader,
+    reader: Input,
     header: Header,
     index: IndexKind,
     samples: Vec<String>,
@@ -313,31 +316,12 @@ pub struct VariantFile {
 }
 
 impl VariantFile {
+    /// Opens a bgzipped VCF (TBI or CSI index) or a BCF (CSI), local or at a URL
+    /// ([`crate::remote`]): a remote file's index is fetched whole (and cached), its records by
+    /// range, as for BAM. An index elsewhere is given with [`crate::set_index_for`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_owned();
-        if crate::remote::is_remote(&path) {
-            return Err(Error::Io { path, cause: std::io::Error::new(std::io::ErrorKind::Unsupported, "VCF/BCF can't be read from a URL yet (BAM, CRAM, FASTA, 2bit, bigWig and annotations can); download it with its index") });
-        }
-        let p = path.to_string_lossy().into_owned();
-        let io_err = |e: std::io::Error| Error::Io { path: path.clone(), cause: e };
-        let mut reader = Reader::open(&p, 0).map_err(|e| io_err(std::io::Error::other(e.to_string())))?;
-        let header = reader.read_header().map_err(|e| io_err(std::io::Error::other(e.to_string())))?;
-
-        let index = match reader.format() {
-            InputFormat::Vcf => {
-                let idx = locate(&p, IndexFormat::Tbi).or_else(|| locate(&p, IndexFormat::Csi)).ok_or_else(|| Error::MissingIndex {
-                    path: path.clone(),
-                    tried: ".tbi, .csi".into(),
-                    how: vcf_index_advice(&path),
-                })?;
-                IndexKind::Tabix(Box::new(Tabix::load(&idx).map_err(io_err)?))
-            }
-            InputFormat::Bcf => {
-                let idx = locate(&p, IndexFormat::Csi)
-                    .ok_or_else(|| Error::MissingIndex { path: path.clone(), tried: ".csi".into(), how: "create one with `bcftools index`".into() })?;
-                IndexKind::Csi(Box::new(Index::read(&idx).map_err(io_err)?))
-            }
-        };
+        let (reader, header, index) = if crate::remote::is_remote(&path) { open_remote(&path)? } else { open_local(&path)? };
 
         let samples = header.samples().iter().map(|s| String::from_utf8_lossy(s).into_owned()).collect();
         let contigs = match &index {
@@ -397,8 +381,8 @@ impl VariantFile {
             IndexKind::Tabix(tbx) => {
                 let Some(tid) = tbx.name_to_id(contig.as_bytes()) else { return Ok(None) };
                 let Some(plan) = tbx.index.query(tid as usize, beg, end) else { return Ok(None) };
-                let mut q = Query::new(plan);
-                while self.reader.query_next_line(&mut q, tbx, &mut self.line).map_err(err)? {
+                let mut q = self.reader.scan(plan);
+                while self.reader.next_line(&mut q, tbx, &mut self.line).map_err(err)? {
                     let line = String::from_utf8_lossy(&self.line);
                     let line = line.trim_end_matches(['\n', '\r']);
                     if same_record(&line.split('\t').take(5).collect::<Vec<_>>(), var) {
@@ -409,8 +393,8 @@ impl VariantFile {
             IndexKind::Csi(index) => {
                 let Some(tid) = self.header.contig_id(contig.as_bytes()) else { return Ok(None) };
                 let Some(plan) = index.query(tid as usize, beg, end) else { return Ok(None) };
-                let mut q = Query::new(plan);
-                while self.reader.query_next_bcf(&mut q, &self.header, &mut self.record).map_err(err)? {
+                let mut q = self.reader.scan(plan);
+                while self.reader.next_bcf(&mut q, &self.header, &mut self.record).map_err(err)? {
                     self.text.clear();
                     if vcf::format_record(&self.header, &self.record, &mut self.text).is_err() {
                         continue;
@@ -484,8 +468,8 @@ impl VariantFile {
             IndexKind::Tabix(tbx) => {
                 let Some(tid) = tbx.name_to_id(contig.as_bytes()) else { return Ok(out) };
                 let Some(plan) = tbx.index.query(tid as usize, beg, end) else { return Ok(out) };
-                let mut q = Query::new(plan);
-                while self.reader.query_next_line(&mut q, tbx, &mut self.line).map_err(err)? {
+                let mut q = self.reader.scan(plan);
+                while self.reader.next_line(&mut q, tbx, &mut self.line).map_err(err)? {
                     let mut line = std::mem::take(&mut self.line);
                     let parsed = vcf::parse(&mut self.header, &mut line, &mut self.record);
                     self.line = line;
@@ -497,14 +481,90 @@ impl VariantFile {
             IndexKind::Csi(index) => {
                 let Some(tid) = self.header.contig_id(contig.as_bytes()) else { return Ok(out) };
                 let Some(plan) = index.query(tid as usize, beg, end) else { return Ok(out) };
-                let mut q = Query::new(plan);
-                while self.reader.query_next_bcf(&mut q, &self.header, &mut self.record).map_err(err)? {
+                let mut q = self.reader.scan(plan);
+                while self.reader.next_bcf(&mut q, &self.header, &mut self.record).map_err(err)? {
                     push(&self.header, &mut self.record, &mut self.gts, &mut self.ints, &mut self.text, reference_blocks, &mut out);
                 }
             }
         }
         Ok(out)
     }
+}
+
+/// A local file through pasta's reader, its index found next to it.
+fn open_local(path: &Path) -> Result<(Input, Header, IndexKind)> {
+    let p = path.to_string_lossy().into_owned();
+    let io_err = |e: std::io::Error| Error::Io { path: path.to_owned(), cause: e };
+    let mut reader = Reader::open(&p, 0).map_err(|e| io_err(std::io::Error::other(e.to_string())))?;
+    let header = reader.read_header().map_err(|e| io_err(std::io::Error::other(e.to_string())))?;
+    let index = match reader.format() {
+        InputFormat::Vcf => {
+            let idx = locate(&p, IndexFormat::Tbi).or_else(|| locate(&p, IndexFormat::Csi)).ok_or_else(|| Error::MissingIndex {
+                path: path.to_owned(),
+                tried: ".tbi, .csi".into(),
+                how: vcf_index_advice(path),
+            })?;
+            IndexKind::Tabix(Box::new(Tabix::load(&idx).map_err(io_err)?))
+        }
+        InputFormat::Bcf => {
+            let idx = locate(&p, IndexFormat::Csi)
+                .ok_or_else(|| Error::MissingIndex { path: path.to_owned(), tried: ".csi".into(), how: "create one with `bcftools index`".into() })?;
+            IndexKind::Csi(Box::new(Index::read(&idx).map_err(io_err)?))
+        }
+    };
+    Ok((Input::Local(reader), header, index))
+}
+
+/// A file at a URL: BGZF read by byte range, its index (`x.vcf.gz.tbi`, `x.vcf.gz.csi`, or
+/// the one set with [`crate::set_index_for`]) fetched whole.
+fn open_remote(path: &Path) -> Result<(Input, Header, IndexKind)> {
+    let source = crate::remote::Source::open(path).map_err(|cause| Error::Io { path: path.to_owned(), cause })?;
+    let mut input = RemoteInput::open(source).map_err(|cause| Error::Io { path: path.to_owned(), cause })?;
+    let bcf = input.format == InputFormat::Bcf;
+    let candidates: Vec<PathBuf> = match crate::index_for(path) {
+        Some(index) => vec![index],
+        None if bcf => vec![crate::remote::with_added_extension(path, "csi")],
+        None => vec![crate::remote::with_added_extension(path, "tbi"), crate::remote::with_added_extension(path, "csi")],
+    };
+    let mut found = None;
+    for candidate in &candidates {
+        match crate::remote::read_whole(candidate).and_then(|bytes| parse_index(&bytes)) {
+            Ok(index) => {
+                found = Some((index, candidate));
+                break;
+            }
+            Err(e) if crate::bam_file::is_missing(&e) => continue,
+            Err(cause) => return Err(Error::Io { path: candidate.clone(), cause }),
+        }
+    }
+    let Some((index, at)) = found else {
+        return Err(Error::MissingIndex {
+            path: path.to_owned(),
+            tried: candidates.iter().map(|p| crate::remote::file_name(p)).collect::<Vec<_>>().join(", "),
+            how: "if the index is somewhere else (a presigned URL, say), give its URL in the app's Open URL dialog".into(),
+        });
+    };
+    let index = if bcf {
+        IndexKind::Csi(Box::new(index))
+    } else {
+        let tbx = Tabix::from_index(index)
+            .ok_or_else(|| Error::Io { path: at.clone(), cause: std::io::Error::new(std::io::ErrorKind::InvalidData, "not a tabix index (no tabix header)") })?;
+        IndexKind::Tabix(Box::new(tbx))
+    };
+    let header = input
+        .read_header(match &index {
+            IndexKind::Tabix(t) => Some(t),
+            IndexKind::Csi(_) => None,
+        })
+        .map_err(|cause| Error::Io { path: path.to_owned(), cause })?;
+    Ok((Input::Remote(Box::new(input)), header, index))
+}
+
+/// A TBI or CSI index from its (BGZF-compressed) bytes.
+fn parse_index(bytes: &[u8]) -> std::io::Result<Index> {
+    let mut data = Vec::new();
+    std::io::Read::read_to_end(&mut pasta::bgzf::io::Reader::new(bytes), &mut data)?;
+    Index::parse(&data)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -864,6 +924,50 @@ mod tests {
             }
         }
     }
+
+    /// A VCF at a URL reads the same records as the local file, by range with its index
+    /// fetched; a missing index is reported, and one set elsewhere is used.
+    #[test]
+    fn a_remote_vcf_reads_as_the_local_one() {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/data/hg002-revio");
+        let (base, served) = crate::remote::test_server::serve(data.clone());
+        for name in ["HG002.revio.deepvariant.phased.vcf.gz", "HG002.revio.pbsv.vcf.gz"] {
+            let mut local = VariantFile::open(data.join(name)).unwrap();
+            let mut remote = VariantFile::open(format!("{base}/{name}")).unwrap();
+            assert_eq!(remote.samples(), local.samples());
+            assert_eq!(remote.contig_names(), local.contig_names());
+            assert_eq!(remote.header_contigs(), local.header_contigs());
+            assert_eq!(remote.info_fields(), local.info_fields());
+            for (start, end) in [(0, u64::MAX / 4), (31_000_000, 31_200_000), (58_000_000, 58_100_000)] {
+                let region = Region { contig: "20".into(), start, end };
+                let want = local.query(&region, true).unwrap();
+                assert_eq!(remote.query(&region, true).unwrap(), want, "{name} {start}-{end}");
+                if let Some(v) = want.first() {
+                    assert_eq!(remote.raw_record("chr20", v).unwrap(), local.raw_record("chr20", v).unwrap());
+                }
+            }
+            assert!(!local.query(&Region { contig: "20".into(), start: 0, end: u64::MAX / 4 }, true).unwrap().is_empty(), "{name} has records");
+        }
+        assert!(served.load(std::sync::atomic::Ordering::Relaxed) > 0);
+
+        // No index next to it: said, with where it was looked for.
+        let dir = std::env::temp_dir().join(format!("ggv-io-remote-vcf-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("idx")).unwrap();
+        let name = "HG002.revio.pbsv.vcf.gz";
+        std::fs::copy(data.join(name), dir.join(name)).unwrap();
+        let (base, _) = crate::remote::test_server::serve(dir.clone());
+        let url = PathBuf::from(format!("{base}/{name}"));
+        let e = VariantFile::open(&url).err().unwrap().to_string();
+        assert!(e.contains("no index found") && e.contains(".tbi") && e.contains("Open URL"), "{e}");
+        // Set elsewhere: used.
+        std::fs::copy(data.join(format!("{name}.tbi")), dir.join("idx/pbsv.tbi")).unwrap();
+        crate::set_index_for(&url, Path::new(&format!("{base}/idx/pbsv.tbi")));
+        let mut f = VariantFile::open(&url).unwrap();
+        let mut local = VariantFile::open(data.join(name)).unwrap();
+        let region = Region { contig: "chr20".into(), start: 0, end: u64::MAX / 4 };
+        assert_eq!(f.query(&region, true).unwrap(), local.query(&region, true).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]
@@ -902,4 +1006,5 @@ mod shown_tests {
         // Reference-only (RefCall ".") and gVCF blocks have nothing to skip.
         assert_eq!(v(10, "A", &["."], None).shown(), (9, 10));
     }
+
 }

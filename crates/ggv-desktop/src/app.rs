@@ -668,7 +668,7 @@ impl App {
         s.bookmarks = self.bookmarks.borrow().clone();
         s.overlays = self.overlays.borrow().clone();
         s.track_filters = self.track_filters.iter().map(|(p, e)| (p.clone(), crate::expr::text(*e))).collect();
-        s.indexes = s.bams.iter().filter_map(|p| ggv_io::index_for(p).map(|i| (p.clone(), i))).collect();
+        s.indexes = s.bams.iter().chain(&s.vcfs).filter_map(|p| ggv_io::index_for(p).map(|i| (p.clone(), i))).collect();
         s.variant_colors = self
             .variants
             .iter()

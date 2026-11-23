@@ -484,7 +484,7 @@ fn index_how(path: &Path) -> String {
 
 /// A missing index candidate: skipped, as the next one may exist. A bucket that doesn't allow
 /// listing answers 403 for a missing key, so a 403 counts as missing too.
-fn is_missing(e: &io::Error) -> bool {
+pub(crate) fn is_missing(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::NotFound || (e.kind() == io::ErrorKind::PermissionDenied && e.to_string().contains("HTTP"))
 }
 
