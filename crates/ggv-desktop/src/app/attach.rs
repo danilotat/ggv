@@ -734,4 +734,14 @@ impl App {
     pub fn track_errors(&self) -> Vec<Option<String>> {
         self.tracks.iter().map(|t| t.error.clone()).collect()
     }
+
+    /// The selected read's name.
+    pub fn selected_read_name(&self) -> Option<&str> {
+        self.selected_read.as_deref()
+    }
+
+    /// "View mate in split screen" for a mate at `pos` on `contig` (0-based).
+    pub fn view_mate_in_split(&mut self, contig: &str, pos: u64, read: &str) {
+        self.view_in_split(contig, pos, Some(read.to_owned()));
+    }
 }

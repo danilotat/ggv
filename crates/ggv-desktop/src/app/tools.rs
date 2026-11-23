@@ -166,7 +166,7 @@ fn rgb([r, g, b]: [u8; 3]) -> Color32 {
 }
 
 impl App {
-    pub(super) fn notify(&mut self, msg: impl Into<String>) {
+    pub(crate) fn notify(&mut self, msg: impl Into<String>) {
         self.notice = Some((msg.into(), Instant::now()));
     }
 
@@ -1136,6 +1136,7 @@ impl App {
         }
         let mut open = true;
         let mut go: Option<(String, u64)> = None;
+        let mut beside: Option<(String, u64)> = None;
         let mut search = false;
         let mut copy = None;
         // Off to the side of the pane: what is found is centred in the view.
@@ -1167,16 +1168,24 @@ impl App {
                                 if ui.button("Go to it").clicked() {
                                     go = Some((hit.contig.clone(), hit.pos));
                                 }
-                                if let Some((mc, mp)) = &hit.mate
-                                    && ui.button(format!("Go to mate {mc}:{}", commas(mp + 1))).clicked()
-                                {
-                                    go = Some((mc.clone(), *mp));
+                                if let Some((mc, mp)) = &hit.mate {
+                                    if ui.button(format!("Go to mate {mc}:{}", commas(mp + 1))).clicked() {
+                                        go = Some((mc.clone(), *mp));
+                                    }
+                                    if ui.button("View mate in split screen").on_hover_text("Open a pane beside this one at the mate, the read selected in both").clicked() {
+                                        beside = Some((mc.clone(), *mp));
+                                    }
                                 }
                             });
                             for (sc, sp) in &hit.splits {
-                                if ui.button(format!("Go to split part {sc}:{}", commas(sp + 1))).clicked() {
-                                    go = Some((sc.clone(), *sp));
-                                }
+                                ui.horizontal(|ui| {
+                                    if ui.button(format!("Go to split part {sc}:{}", commas(sp + 1))).clicked() {
+                                        go = Some((sc.clone(), *sp));
+                                    }
+                                    if ui.button("In split screen").on_hover_text("Open a pane beside this one at this part, the read selected in both").clicked() {
+                                        beside = Some((sc.clone(), *sp));
+                                    }
+                                });
                             }
                             if ui.button("Copy as SAM").clicked() {
                                 copy = Some(hit.sam.clone());
@@ -1203,6 +1212,13 @@ impl App {
         }
         if let Some((c, p)) = go {
             self.jump_to(&c, p);
+        }
+        if let Some((c, p)) = beside {
+            let name = f.search.as_ref().map(|s| s.name.clone());
+            if let Some(n) = &name {
+                self.selected_read = Some(n.clone());
+            }
+            self.view_in_split(&c, p, name);
         }
         if let Some(sam) = copy {
             ctx.copy_text(sam);

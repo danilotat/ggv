@@ -196,6 +196,13 @@ pub struct Args {
     pub measure: Option<String>,
 }
 
+/// A pane the window should add: its locus and the read to select in it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SplitRequest {
+    pub locus: String,
+    pub read: Option<String>,
+}
+
 pub struct App {
     tracks: Vec<Track>,
     variants: Vec<VariantTrack>,
@@ -335,6 +342,8 @@ pub struct App {
     auto_reload: bool,
     /// An action for the window rather than this pane (split, link), taken by the shell.
     pub shell_request: Option<actions::Action>,
+    /// A new pane for the window to open (View mate in split screen), taken by the shell.
+    pub split_request: Option<SplitRequest>,
     /// The files the window's other panes have open (set by the shell before a command), which
     /// an export from this pane must not overwrite either.
     pub other_panes_files: Vec<PathBuf>,
@@ -574,6 +583,7 @@ impl App {
             watcher: crate::watch::Watcher::spawn(ctx),
             auto_reload: true,
             shell_request: None,
+            split_request: None,
             other_panes_files: Vec::new(),
             ref_reader: Default::default(),
             consequence_cache: Default::default(),
@@ -607,7 +617,11 @@ impl App {
             app.set_reference(r, ctx);
         }
         match args.session {
-            Some(s) => app.apply_session(s, false, ctx),
+            Some(s) => {
+                app.apply_session(s, false, ctx);
+                // Applying a session clears the selection: a pane opened at a read's mate keeps it.
+                app.selected_read = args.select_read.clone().or(app.selected_read.take());
+            }
             None => {
                 app.add_tracks(args.bams, ctx);
                 app.add_genes(args.genes, ctx);
@@ -1365,6 +1379,19 @@ impl App {
     }
 
     /// Centres `pos` on `contig` (any naming), zooming to read level if the view is wide.
+    /// Asks the window for a new pane at `pos` on `contig` (as wide as [`Self::jump_to`] makes
+    /// the view), with `read` selected there so its alignments stay outlined in both panes.
+    pub(super) fn view_in_split(&mut self, contig: &str, pos: u64, read: Option<String>) {
+        let aliases = ggv_model::contig_aliases(contig);
+        let Some(c) = self.contigs.iter().find(|x| x.name == contig || aliases.contains(&x.name)) else {
+            self.error = Some(format!("{contig} is not in this genome"));
+            return;
+        };
+        let start = pos.saturating_sub(500);
+        let end = (pos + 501).min(c.length.max(1));
+        self.split_request = Some(SplitRequest { locus: format!("{}:{}-{}", c.name, start + 1, end.max(start + 1)), read });
+    }
+
     fn jump_to(&mut self, contig: &str, pos: u64) {
         let aliases = ggv_model::contig_aliases(contig);
         let Some(c) = self.contigs.iter().position(|x| x.name == contig || aliases.contains(&x.name)) else {

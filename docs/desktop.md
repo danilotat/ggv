@@ -243,6 +243,9 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
   mismatch colours or consequence labels are trusted. Custom assemblies are simply "unknown".
 - **Mates and split reads**: right-click a read → **Read details** for **Go to mate** and **Go to
   split part** (from `SA`), which jump there (across chromosomes) and outline it; tooltips list both.
+  **View mate in split screen** (and **In split screen** beside each split part) opens a pane
+  beside the current one at the mate instead, the read selected and outlined in both. **Find read
+  by name** offers the same for the read it finds.
 - **Region statistics**: Shift-drag across the tracks to select a region; a window gives each
   track's read counts by filter, mean/median/min/max depth, breadth at 1/10/20/30×, and the
   variable sites, matching `ggv query summary`, with **Copy as JSON**.
