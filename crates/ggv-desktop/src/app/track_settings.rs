@@ -324,6 +324,7 @@ impl App {
         let mut open = true;
         let mut copy = None;
         let mut go: Option<(String, u64)> = None;
+        let mut beside: Option<(String, u64)> = None;
         let spot = self.window_pos(ctx, 260.0);
         super::tool_window::ToolWindow::new("Read details", egui::Id::unique(("read-details", self.reference_slot)))
             .placed(spot, self.pane_settled())
@@ -346,19 +347,35 @@ impl App {
                 });
                 if let Some(m) = read.mate
                     && let Some(c) = contigs.get(m.contig_id.max(0) as usize)
-                    && ui.button(format!("Go to mate  {c}:{}", commas(m.pos.max(0) as u64 + 1))).clicked()
                 {
-                    go = Some((c.clone(), m.pos.max(0) as u64));
+                    let at = (c.clone(), m.pos.max(0) as u64);
+                    ui.horizontal(|ui| {
+                        if ui.button(format!("Go to mate  {c}:{}", commas(at.1 + 1))).clicked() {
+                            go = Some(at.clone());
+                        }
+                        if ui.button("View mate in split screen").on_hover_text("Open a pane beside this one at the mate, the read selected in both").clicked() {
+                            beside = Some(at.clone());
+                        }
+                    });
                 }
                 for sa in &read.supplementary {
                     let label = format!("Go to split part  {}:{} ({}, MAPQ {})", sa.contig, commas(sa.pos + 1), if sa.reverse { "−" } else { "+" }, sa.mapq);
-                    if ui.button(label).clicked() {
-                        go = Some((sa.contig.clone(), sa.pos));
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.button(label).clicked() {
+                            go = Some((sa.contig.clone(), sa.pos));
+                        }
+                        if ui.button("In split screen").on_hover_text("Open a pane beside this one at this part, the read selected in both").clicked() {
+                            beside = Some((sa.contig.clone(), sa.pos));
+                        }
+                    });
                 }
             });
         if let Some(seq) = copy {
             self.copy_read(ctx, i, read, seq);
+        }
+        if let Some((c, pos)) = beside {
+            self.selected_read = Some(read.name.clone());
+            self.view_in_split(&c, pos, Some(read.name.clone()));
         }
         if let Some((c, pos)) = go {
             // Through history: Alt+Left comes back.

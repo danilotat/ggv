@@ -124,11 +124,11 @@ impl Shell {
 
     /// Adds a pane showing the active pane's files, at `locus` (or the active pane's view).
     fn split(&mut self, ctx: &egui::Context, locus: Option<String>) {
-        self.split_at(ctx, locus.map(|l| session::PaneView { locus: Some(l), highlight: None }));
+        self.split_at(ctx, locus.map(|l| session::PaneView { locus: Some(l), highlight: None }), None);
     }
 
-    /// Adds a pane at `view` (or the active pane's view).
-    fn split_at(&mut self, ctx: &egui::Context, view: Option<session::PaneView>) {
+    /// Adds a pane at `view` (or the active pane's view), with `select_read` selected in it.
+    fn split_at(&mut self, ctx: &egui::Context, view: Option<session::PaneView>, select_read: Option<String>) {
         if self.panes.len() >= MAX_PANES {
             return;
         }
@@ -137,7 +137,7 @@ impl Shell {
             s.locus = v.locus;
             s.highlight = v.highlight;
         }
-        match App::new(ctx, Args { session: Some(s), bookmarks: Some(self.bookmarks.clone()), overlays: Some(self.overlays.clone()), ..Default::default() }) {
+        match App::new(ctx, Args { session: Some(s), select_read, bookmarks: Some(self.bookmarks.clone()), overlays: Some(self.overlays.clone()), ..Default::default() }) {
             Ok(mut pane) => {
                 pane.set_shared_style(self.style);
                 self.panes.push(pane);
@@ -145,6 +145,16 @@ impl Shell {
             }
             Err(e) => eprintln!("ggv: new pane: {e:#}"),
         }
+    }
+
+    /// A pane asked for one beside it (View mate in split screen): added after it, or said
+    /// why not when the window has its most panes.
+    fn split_to(&mut self, ctx: &egui::Context, r: crate::app::SplitRequest) {
+        if self.panes.len() >= MAX_PANES {
+            self.panes[self.active].notify(format!("At most {MAX_PANES} panes: close one to view {} beside this one", r.locus));
+            return;
+        }
+        self.split_at(ctx, Some(session::PaneView { locus: Some(r.locus), highlight: None }), r.read);
     }
 
     fn close(&mut self, i: usize) {
@@ -238,7 +248,7 @@ impl Shell {
         self.set_active(0);
         for v in s.panes.iter().skip(1) {
             self.set_active(0);
-            self.split_at(ctx, Some(v.clone()));
+            self.split_at(ctx, Some(v.clone()), None);
         }
         self.linked = false;
         self.relink = Some(s.linked);
@@ -656,6 +666,9 @@ impl eframe::App for Shell {
         if let Some(a) = self.panes[self.active].shell_request.take() {
             self.shell_action(a, &ctx);
         }
+        if let Some(r) = self.panes[self.active].split_request.take() {
+            self.split_to(&ctx, r);
+        }
         self.follow();
 
         if self.attach.is_some() {
@@ -747,6 +760,39 @@ mod tests {
         command(&mut shell, &ctx, &tx, "link", vcf).0.unwrap();
         assert_eq!(shell.panes[0].current_session().vcfs, vec![PathBuf::from(&vcf_url)]);
         let _ = std::fs::remove_dir_all(elsewhere);
+    }
+
+    /// View mate in split screen: a pane opens at the mate with the read still selected, the
+    /// first pane stays where it was; with the window full it says why instead.
+    #[test]
+    fn a_mate_opens_in_a_pane_beside() {
+        let Some(bam) = test_bam() else { return };
+        let ctx = egui::Context::default();
+        let (mut shell, _tx) = window(&ctx, Args { bams: vec![bam], locus: Some("chr20:31180000-31181000".into()), ..Default::default() });
+        let before = shell.panes[0].current_session().locus;
+        shell.panes[0].view_mate_in_split("20", 31_185_499, "m64011_read/1/ccs");
+        let r = shell.panes[0].split_request.take().expect("asked for");
+        assert_eq!(r.locus, "chr20:31185000-31186000", "named as the genome names it, as wide as Go to mate");
+        shell.split_to(&ctx, r);
+        assert_eq!((shell.panes.len(), shell.active), (2, 1));
+        assert_eq!(shell.panes[1].selected_read_name(), Some("m64011_read/1/ccs"));
+        // Sent there; it goes on its first frame.
+        assert_eq!(shell.panes[1].going_to(), Some("chr20:31185000-31186000"));
+        assert_eq!(shell.panes[0].current_session().locus, before);
+
+        // Near a contig's start the view is clamped to it.
+        shell.panes[1].view_mate_in_split("chr20", 10, "r");
+        assert_eq!(shell.panes[1].split_request.as_ref().unwrap().locus, "chr20:1-511");
+        shell.panes[1].split_request = None;
+
+        while shell.panes.len() < MAX_PANES {
+            shell.split(&ctx, None);
+        }
+        shell.panes[shell.active].view_mate_in_split("chr20", 31_185_499, "r");
+        let r = shell.panes[shell.active].split_request.take().unwrap();
+        shell.split_to(&ctx, r);
+        assert_eq!(shell.panes.len(), MAX_PANES);
+        assert!(shell.panes[shell.active].notice_text().is_some_and(|n| n.contains("close one")));
     }
 
     /// `panes` publishes like every command: the next `state` shows the panes it made or

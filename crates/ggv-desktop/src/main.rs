@@ -206,6 +206,8 @@ enum GroupArg {
     Base,
     /// Haplotype by the alleles at heterozygous sites in view (no HP tags needed).
     Alleles,
+    /// The chromosome each read's mate maps to.
+    MateChrom,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -364,6 +366,7 @@ fn main() -> eframe::Result {
                         // Placed at the locus once it is resolved.
                         GroupArg::Base => ggv_layout::GroupBy::BaseAt(u64::MAX),
                         GroupArg::Alleles => ggv_layout::GroupBy::Alleles,
+                        GroupArg::MateChrom => ggv_layout::GroupBy::MateContig,
                     },
                     soft_clips: cli.soft_clips,
                     dark: cli.dark,

@@ -284,7 +284,7 @@ fn data_tools() -> Vec<Value> {
             "render",
             "Picture",
             "A PNG of a base (with 50 bp each side, outlined) or a region, every alignment file stacked, as IGV would show it. For clients that can see images, or to show a person; the numbers are in `evidence`.",
-            schema(&[], &[json!({"locus": {"type": "string"}, "region": {"type": "string"}, "width": {"type": "integer", "minimum": 300, "maximum": 2400, "description": "Default 1000."}, "color_by": {"type": "string", "description": "Read colours: none (grey, default), strand, haplotype (HP tag), insert-size (pair orientation and insert size), base-mods (methylation, MM/ML), or tag:XX (one colour per value of any tag, e.g. tag:CB)."}, "group_by": {"type": "string", "description": "Group reads into labelled bands: none (default), strand, haplotype (HP tag), read group, alleles (heterozygous sites), base (for a single base: what each read shows there), or tag:XX (by any tag's value, e.g. tag:CB, tag:PS)."}, "link": {"type": "boolean", "description": "Put each split read's parts (primary and supplementary) on one row, joined. Default false."}, "pairs": {"type": "boolean", "description": "View as pairs: put the two mates of a pair on one row, joined by a grey line across the insert, grouped by the leftmost mate. Default false."}, "sashimi": {"type": "boolean", "description": "Draw splice junctions (RNA-seq) under each file's coverage: an arc per intron with its read count, + strand above and − below. Default false."}, "min_junction_reads": {"type": "integer", "minimum": 1, "description": "With sashimi: leave out junctions with fewer reads (default 2)."}}), files_schema(), filter_schema()]),
+            schema(&[], &[json!({"locus": {"type": "string"}, "region": {"type": "string"}, "width": {"type": "integer", "minimum": 300, "maximum": 2400, "description": "Default 1000."}, "color_by": {"type": "string", "description": "Read colours: none (grey, default), strand, haplotype (HP tag), insert-size (pair orientation and insert size), base-mods (methylation, MM/ML), or tag:XX (one colour per value of any tag, e.g. tag:CB)."}, "group_by": {"type": "string", "description": "Group reads into labelled bands: none (default), strand, haplotype (HP tag), read group, alleles (heterozygous sites), mate-chrom (the chromosome each read's mate maps to), base (for a single base: what each read shows there), or tag:XX (by any tag's value, e.g. tag:CB, tag:PS)."}, "link": {"type": "boolean", "description": "Put each split read's parts (primary and supplementary) on one row, joined. Default false."}, "pairs": {"type": "boolean", "description": "View as pairs: put the two mates of a pair on one row, joined by a grey line across the insert, grouped by the leftmost mate. Default false."}, "sashimi": {"type": "boolean", "description": "Draw splice junctions (RNA-seq) under each file's coverage: an arc per intron with its read count, + strand above and − below. Default false."}, "min_junction_reads": {"type": "integer", "minimum": 1, "description": "With sashimi: leave out junctions with fewer reads (default 2)."}}), files_schema(), filter_schema()]),
         ),
     ]
 }
@@ -2595,9 +2595,10 @@ warning: {}", w.join("; ")) },
             "haplotype" => ggv_layout::GroupBy::Haplotype,
             "read group" | "read-group" => ggv_layout::GroupBy::ReadGroup,
             "alleles" => ggv_layout::GroupBy::Alleles,
+            "mate-chrom" | "chromosome of mate" => ggv_layout::GroupBy::MateContig,
             "base" if target.len() == 1 => ggv_layout::GroupBy::BaseAt(target.start),
             "base" => bail!("group_by base needs a `locus` (a single base)"),
-            other => bail!("group_by: `{other}` is not one of none, strand, haplotype, read group, alleles, base"),
+            other => bail!("group_by: `{other}` is not one of none, strand, haplotype, read group, alleles, mate-chrom, base"),
         };
         let region = if target.len() == 1 {
             // Clamped to the contig, so the picture and its note stop at its end.

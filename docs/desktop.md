@@ -243,6 +243,9 @@ times with it loaded: about 1 ms across all of chr17, 0.4 ms at 2 Mb, and unchan
   mismatch colours or consequence labels are trusted. Custom assemblies are simply "unknown".
 - **Mates and split reads**: right-click a read → **Read details** for **Go to mate** and **Go to
   split part** (from `SA`), which jump there (across chromosomes) and outline it; tooltips list both.
+  **View mate in split screen** (and **In split screen** beside each split part) opens a pane
+  beside the current one at the mate instead, the read selected and outlined in both. **Find read
+  by name** offers the same for the read it finds.
 - **Region statistics**: Shift-drag across the tracks to select a region; a window gives each
   track's read counts by filter, mean/median/min/max depth, breadth at 1/10/20/30×, and the
   variable sites, matching `ggv query summary`, with **Copy as JSON**.
@@ -282,6 +285,11 @@ every shortcut:
   Hovering a gene names the base's `c.` position, codon and amino acid.
 - **Amino acids** on the gene track when zoomed in (a codon at least 9 points wide): one letter
   per codon, alternate codons shaded, the start codon green and stops red.
+- **Group by chromosome of mate** (Group menu, or `--group mate-chrom`): a band per contig the
+  mates map to, as in IGV: the read's own contig first (`mate on chr20 (same)`), then the others
+  in header order, then reads whose mate is unmapped and reads that aren't paired. Mates on
+  another chromosome (translocations, contamination, mismapped repeats) stand out as their own
+  bands.
 - **Group by alleles** (Group menu, or `--group alleles`): splits reads into two haplotypes by the
   alleles they carry at the heterozygous sites in the loaded span, for data without `HP` tags.
   Sites are found from the reads (one alternate base at 25–75%, depth ≥ 6), oriented left to
