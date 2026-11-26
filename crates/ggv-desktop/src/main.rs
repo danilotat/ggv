@@ -52,8 +52,8 @@ use clap::{Parser, ValueEnum};
 use files::{Kind, kind_of};
 use eframe::egui;
 
-/// `0.9.0 (commit abc123def456, x86_64-pc-windows-msvc)`: the exact build, for bug reports.
-const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (commit ", env!("GGV_COMMIT"), ", ", env!("GGV_TARGET"), ")");
+/// `0.9.2+dt.1 (danilotat/ggv fork, commit abc123def456, x86_64-pc-windows-msvc)`: the exact build, for bug reports.
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (danilotat/ggv fork, commit ", env!("GGV_COMMIT"), ", ", env!("GGV_TARGET"), ")");
 
 /// GGV desktop viewer.
 #[derive(Parser)]

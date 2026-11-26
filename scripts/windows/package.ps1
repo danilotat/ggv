@@ -20,6 +20,8 @@ try {
     }
     $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $root 'target' }
     $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+    # Build metadata (0.9.2+dt.1): '+' becomes '-' in file names.
+    $version = $version.Replace('+', '-')
     $name = "ggv-$version-windows-x64"
     $dist = Join-Path $root 'dist'
     $stage = Join-Path $dist $name

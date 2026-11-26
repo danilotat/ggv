@@ -17,6 +17,8 @@ if [ "${1:-}" != "--no-build" ]; then
 fi
 target="${CARGO_TARGET_DIR:-$root/target}/release"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+# Build metadata (0.9.2+dt.1): '+' becomes '-' in file names, which release downloads keep as is.
+version="${version//+/-}"
 arch=$(uname -m)
 name="ggv-$version-linux-$arch"
 stage="$root/dist/$name"

@@ -5,11 +5,11 @@ three interfaces that share one implementation: a desktop application (`ggv-desk
 command-line tool (`ggv`), and a Model Context Protocol server (`ggv mcp`). A query at the same
 locus returns the same values from each of them.
 
-[![Latest release](https://img.shields.io/github/v/release/DylanCosto/ggv)](https://github.com/DylanCosto/ggv/releases/latest)
-[![CI](https://github.com/DylanCosto/ggv/actions/workflows/ci.yml/badge.svg)](https://github.com/DylanCosto/ggv/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/github/license/DylanCosto/ggv)](https://github.com/DylanCosto/ggv/blob/main/LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/danilotat/ggv)](https://github.com/danilotat/ggv/releases/latest)
+[![CI](https://github.com/danilotat/ggv/actions/workflows/ci.yml/badge.svg)](https://github.com/danilotat/ggv/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/danilotat/ggv)](https://github.com/danilotat/ggv/blob/main/LICENSE)
 
-![GGV showing a heterozygous 6.8 kb deletion in HG002 long reads, grouped and coloured by haplotype: the reads on haplotype 1 carry the deletion and the reads on haplotype 2 span it intact](https://raw.githubusercontent.com/DylanCosto/ggv/main/docs/images/ggv-desktop.png)
+![GGV showing a heterozygous 6.8 kb deletion in HG002 long reads, grouped and coloured by haplotype: the reads on haplotype 1 carry the deletion and the reads on haplotype 2 span it intact](https://raw.githubusercontent.com/danilotat/ggv/main/docs/images/ggv-desktop.png)
 
 *A heterozygous 6.8 kb deletion in PacBio HiFi reads of HG002, grouped by haplotype. The reads
 carrying the deletion are all on haplotype 1. This locus is the first step of the demo.*
@@ -29,7 +29,7 @@ files; it does not call variants.
 
 ## Installation
 
-Packages are on the [Releases](https://github.com/DylanCosto/ggv/releases/latest) page.
+Packages are on the [Releases](https://github.com/danilotat/ggv/releases/latest) page.
 
 | System | Package | Requirements |
 |---|---|---|
@@ -46,7 +46,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1   # Windows
 
 The builds are not code-signed. On Windows the first launch shows a warning; choose
 **More info → Run anyway**. On macOS `install.sh` removes the quarantine attribute.
-[docs/install.md](https://github.com/DylanCosto/ggv/blob/main/docs/install.md) describes
+[docs/install.md](https://github.com/danilotat/ggv/blob/main/docs/install.md) describes
 uninstalling and verifying downloads.
 
 ## Demo
@@ -71,14 +71,14 @@ gene name. Files can also be dragged onto the window.
 Selecting a base opens the Evidence panel, which counts reads at that position by allele and
 strand and shows the matching VCF record and the predicted effect on overlapping transcripts.
 
-![The Evidence panel at a heterozygous variant in GNAS: 10 reads with C and 15 with T, by strand, with the HGVS consequence c.393C>T p.Ile131=, and the gene track showing the amino acids](https://raw.githubusercontent.com/DylanCosto/ggv/main/docs/images/evidence.png)
+![The Evidence panel at a heterozygous variant in GNAS: 10 reads with C and 15 with T, by strand, with the HGVS consequence c.393C>T p.Ile131=, and the gene track showing the amino acids](https://raw.githubusercontent.com/danilotat/ggv/main/docs/images/evidence.png)
 
 ### Base modifications
 
 Reads can be coloured by base modification and grouped by haplotype. At the imprinted GNAS
 locus below, haplotype 1 is mostly unmethylated (blue) and haplotype 2 mostly methylated (red).
 
-![Reads at the imprinted GNAS locus coloured by base modification and grouped by haplotype: haplotype 1 is mostly blue (unmethylated), haplotype 2 mostly red (methylated)](https://raw.githubusercontent.com/DylanCosto/ggv/main/docs/images/methylation.png)
+![Reads at the imprinted GNAS locus coloured by base modification and grouped by haplotype: haplotype 1 is mostly blue (unmethylated), haplotype 2 mostly red (methylated)](https://raw.githubusercontent.com/danilotat/ggv/main/docs/images/methylation.png)
 
 ### Other functions
 
@@ -91,7 +91,7 @@ locus below, haplotype 1 is mostly unmethylated (blue) and haplotype 2 mostly me
   lists keyboard shortcuts.
 - At chromosome scale, depth is estimated from the index without reading individual records.
 
-[docs/desktop.md](https://github.com/DylanCosto/ggv/blob/main/docs/desktop.md) covers splicing,
+[docs/desktop.md](https://github.com/danilotat/ggv/blob/main/docs/desktop.md) covers splicing,
 structural variants, signal tracks, sessions and reports.
 
 ## Command line
@@ -113,11 +113,11 @@ chr20    58903752  C    25     0  10  0  15  0  0    0    ...  0.6           T:1
 
 The same site rendered with `render --sort base`:
 
-![A headless render of the same heterozygous site: coverage with the alternate allele in colour, and 25 reads sorted so the 15 carrying T are on top](https://raw.githubusercontent.com/DylanCosto/ggv/main/docs/images/render.png)
+![A headless render of the same heterozygous site: coverage with the alternate allele in colour, and 25 reads sorted so the 15 carrying T are on top](https://raw.githubusercontent.com/danilotat/ggv/main/docs/images/render.png)
 
 `batch` takes a BED file, a VCF or a list of loci, and writes an image and an HTML report for
 each site plus an index page. All queries accept `--format json`.
-[docs/cli.md](https://github.com/DylanCosto/ggv/blob/main/docs/cli.md) lists all options.
+[docs/cli.md](https://github.com/danilotat/ggv/blob/main/docs/cli.md) lists all options.
 
 ## MCP server
 
@@ -165,7 +165,7 @@ Tools return structured data. The `evidence` result for the site above, abridged
 
 When attached to the desktop application, the server can also change the view and display
 settings, add bookmarks and overlays, and wait for the user to select a base.
-[docs/mcp.md](https://github.com/DylanCosto/ggv/blob/main/docs/mcp.md) lists all tools.
+[docs/mcp.md](https://github.com/danilotat/ggv/blob/main/docs/mcp.md) lists all tools.
 
 ## Supported formats
 
@@ -182,7 +182,7 @@ Missing indexes can be built by the desktop application or with `ggv index`.
 Built-in genomes: `--genome hg38` downloads the reference sequence and RefSeq genes on first use
 (877 MB for hg38) and caches them. hg19, T2T (hs1), mm39, mm10 and sacCer3 are also available;
 hg38 and hg19 include ClinVar and other tracks. See
-[docs/genomes.md](https://github.com/DylanCosto/ggv/blob/main/docs/genomes.md).
+[docs/genomes.md](https://github.com/danilotat/ggv/blob/main/docs/genomes.md).
 
 Not supported yet: remote files (HTTPS, S3), cancelling a load in progress, CRAM with a 2bit
 reference.
@@ -191,12 +191,12 @@ reference.
 
 | Document | Contents |
 |---|---|
-| [Desktop application](https://github.com/DylanCosto/ggv/blob/main/docs/desktop.md) | alignments, variants, review, splicing, signal tracks, keyboard shortcuts |
-| [Command line](https://github.com/DylanCosto/ggv/blob/main/docs/cli.md) | queries, rendering and batch reports |
-| [MCP server](https://github.com/DylanCosto/ggv/blob/main/docs/mcp.md) | tool reference, attached mode |
-| [Genomes](https://github.com/DylanCosto/ggv/blob/main/docs/genomes.md) | built-in references and tracks |
-| [Installation](https://github.com/DylanCosto/ggv/blob/main/docs/install.md) | packages, installers, first run |
-| [Development](https://github.com/DylanCosto/ggv/blob/main/docs/development.md) | crates, correctness checks, building |
+| [Desktop application](https://github.com/danilotat/ggv/blob/main/docs/desktop.md) | alignments, variants, review, splicing, signal tracks, keyboard shortcuts |
+| [Command line](https://github.com/danilotat/ggv/blob/main/docs/cli.md) | queries, rendering and batch reports |
+| [MCP server](https://github.com/danilotat/ggv/blob/main/docs/mcp.md) | tool reference, attached mode |
+| [Genomes](https://github.com/danilotat/ggv/blob/main/docs/genomes.md) | built-in references and tracks |
+| [Installation](https://github.com/danilotat/ggv/blob/main/docs/install.md) | packages, installers, first run |
+| [Development](https://github.com/danilotat/ggv/blob/main/docs/development.md) | crates, correctness checks, building |
 
 ## Building from source
 
@@ -212,12 +212,12 @@ are in `scripts/windows`, `scripts/linux` and `scripts/macos`. File parsing is d
 
 ## Bug reports
 
-Use the [issue template](https://github.com/DylanCosto/ggv/issues/new?template=bug_report.yml)
+Use the [issue template](https://github.com/danilotat/ggv/issues/new?template=bug_report.yml)
 and include the diagnostics from **Commands → About GGV**.
 
 ## License
 
-MIT; see [LICENSE](https://github.com/DylanCosto/ggv/blob/main/LICENSE). Third-party components
+MIT; see [LICENSE](https://github.com/danilotat/ggv/blob/main/LICENSE). Third-party components
 are listed in
-[THIRD_PARTY_NOTICES.md](https://github.com/DylanCosto/ggv/blob/main/THIRD_PARTY_NOTICES.md),
+[THIRD_PARTY_NOTICES.md](https://github.com/danilotat/ggv/blob/main/THIRD_PARTY_NOTICES.md),
 including the MANE transcript list (NCBI/EMBL-EBI, public domain).

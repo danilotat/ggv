@@ -240,6 +240,14 @@ pub struct Server {
     pub state: tools::State,
 }
 
+/// The version with the commit as build metadata (0.9.2+abc1234), appended to any metadata the
+/// version already has (0.9.2+dt.1.abc1234) so there is a single '+'.
+fn server_version() -> String {
+    let (version, commit) = (env!("CARGO_PKG_VERSION"), env!("GGV_COMMIT"));
+    let sep = if version.contains('+') { '.' } else { '+' };
+    format!("{version}{sep}{commit}")
+}
+
 fn error(id: &Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
 }
@@ -284,7 +292,7 @@ impl Server {
                 json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}},
-                    "serverInfo": {"name": "ggv", "title": "GGV genome viewer", "version": concat!(env!("CARGO_PKG_VERSION"), "+", env!("GGV_COMMIT"))},
+                    "serverInfo": {"name": "ggv", "title": "GGV genome viewer", "version": server_version()},
                     "instructions": INSTRUCTIONS,
                 })
             }

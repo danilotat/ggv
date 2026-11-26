@@ -16,8 +16,8 @@ use ggv_io::{BamFile, ReferenceFasta, signal::bin_edges};
 use ggv_model::Region;
 use ggv_query::{PileupOptions, PositionStats, SummaryOptions};
 
-/// `0.9.0 (commit abc123def456, x86_64-pc-windows-msvc)`: the exact build, for bug reports.
-const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (commit ", env!("GGV_COMMIT"), ", ", env!("GGV_TARGET"), ")");
+/// `0.9.2+dt.1 (danilotat/ggv fork, commit abc123def456, x86_64-pc-windows-msvc)`: the exact build, for bug reports.
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (danilotat/ggv fork, commit ", env!("GGV_COMMIT"), ", ", env!("GGV_TARGET"), ")");
 
 /// GGV — a genome viewer built for people and agents. Today: structured queries.
 #[derive(Parser)]

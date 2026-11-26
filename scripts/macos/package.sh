@@ -17,6 +17,10 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
 target="${CARGO_TARGET_DIR:-$root/target}"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+# Bundle versions must be plain numbers (0.9.2), so build metadata (+dt.1) is left out of them;
+# in file names '+' becomes '-'.
+bundle_version="${version%%[-+]*}"
+version="${version//+/-}"
 
 if [[ "${1:-}" == "--native" ]]; then
   cargo build --release --locked -p ggv-cli -p ggv-desktop
@@ -54,11 +58,11 @@ cat > "$app/Info.plist" <<PLIST
 <dict>
   <key>CFBundleName</key><string>GGV</string>
   <key>CFBundleDisplayName</key><string>GGV</string>
-  <key>CFBundleIdentifier</key><string>io.github.dylancosto.ggv</string>
+  <key>CFBundleIdentifier</key><string>io.github.danilotat.ggv</string>
   <key>CFBundleExecutable</key><string>ggv-desktop</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleVersion</key><string>$version</string>
-  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$bundle_version</string>
+  <key>CFBundleShortVersionString</key><string>$bundle_version</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>

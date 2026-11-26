@@ -20,9 +20,9 @@ pub fn set_gpu(info: &eframe::wgpu::AdapterInfo) {
     let _ = GPU.set(format!("{} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info).replace(" ()", ""));
 }
 
-/// `GGV 0.9.0 (commit …, target)`.
+/// `GGV 0.9.2+dt.1 (danilotat/ggv fork, commit …, target)`.
 pub fn build_line() -> String {
-    format!("GGV {} (commit {}, {}, {} build)", env!("CARGO_PKG_VERSION"), env!("GGV_COMMIT"), env!("GGV_TARGET"), env!("GGV_PROFILE"))
+    format!("GGV {} (danilotat/ggv fork, commit {}, {}, {} build)", env!("CARGO_PKG_VERSION"), env!("GGV_COMMIT"), env!("GGV_TARGET"), env!("GGV_PROFILE"))
 }
 
 /// Recent errors, oldest first, each with when it happened.

@@ -1,12 +1,12 @@
 # Installing GGV
 
 Download the package for your system from the
-[Releases](https://github.com/DylanCosto/ggv/releases) page. Each holds `ggv` (command line and
+[Releases](https://github.com/danilotat/ggv/releases) page. Each holds `ggv` (command line and
 MCP server) and `ggv-desktop` (the viewer), an installer, this README, the LICENSE and THIRD_PARTY_NOTICES.md (the open-source crates
 inside). To check
 a download, compare `sha256sum <file>` (`Get-FileHash <file>` on Windows) with the release's
 `SHA256SUMS`. `ggv --version` prints the exact build:
-`ggv 0.9.0 (commit 36ffdb316176, x86_64-pc-windows-msvc)`; give that line in bug reports.
+`ggv 0.9.2+dt.1 (danilotat/ggv fork, commit 36ffdb316176, x86_64-pc-windows-msvc)`; give that line in bug reports.
 
 | System | Package | Needs |
 |---|---|---|
